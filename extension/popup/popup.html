@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>iCloud Backup</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <img src="../icons/icon48.png" alt="" class="logo" />
+    <div>
+      <span class="app-name">iCloud Backup</span>
+      <span class="app-sub">→ Google Photos</span>
+    </div>
+  </header>
+
+  <!-- Connected -->
+  <div id="view-connected" class="hidden">
+    <div class="account-pill">
+      <span class="status-dot active" id="status-dot"></span>
+      <span id="account-email" class="account-email">—</span>
+    </div>
+    <div id="status-text" class="status-label">Active</div>
+    <button id="btn-open-dashboard" class="btn btn-primary">Open Dashboard</button>
+    <button id="btn-sync-now" class="btn btn-secondary">⚡ Sync Now</button>
+  </div>
+
+  <!-- Disconnected -->
+  <div id="view-disconnected" class="hidden">
+    <p class="hint">Connect Gmail to start backing up iCloud photo shares.</p>
+    <p id="detected-hint" class="detected-hint hidden"></p>
+    <button id="btn-connect" class="btn btn-primary">Connect Gmail</button>
+    <p id="connect-waiting" class="connect-waiting hidden">
+      <span class="mini-spinner"></span> Waiting for sign-in…
+    </p>
+  </div>
+
+  <!-- Loading -->
+  <div id="view-loading">
+    <span class="mini-spinner"></span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

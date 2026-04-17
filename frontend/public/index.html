@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>iCloud Backup</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
+      </div>
+      <div>
+        <div class="brand-name">iCloud Backup</div>
+        <div class="brand-sub">→ Google Photos</div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-section="sync">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+        Sync
+      </button>
+      <button class="nav-item" data-section="backup">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"/></svg>
+        Back Up Links
+      </button>
+      <button class="nav-item" data-section="history">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        History
+      </button>
+      <button class="nav-item" data-section="settings">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        Settings
+      </button>
+    </nav>
+
+    <div class="sidebar-account">
+      <div class="account-status">
+        <span class="status-dot idle" id="sb-status-dot"></span>
+        <span class="account-email" id="sb-email">—</span>
+      </div>
+      <div class="account-actions">
+        <button class="link-btn" id="sb-reconnect">Reconnect</button>
+        <span class="sep">·</span>
+        <button class="link-btn danger" id="sb-disconnect">Sign out</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main class="main">
+
+    <!-- ═══ Sync ═══ -->
+    <section id="section-sync" class="section">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">Sync</h1>
+          <p class="section-sub">Automatically back up iCloud photo links found in Gmail</p>
+        </div>
+        <button id="btn-sync-now" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+          Sync Now
+        </button>
+      </div>
+
+      <div class="cards-row">
+        <!-- Auto sync toggle -->
+        <div class="card flex-1">
+          <div class="card-row">
+            <div>
+              <div class="card-title">Auto Sync</div>
+              <div class="card-meta" id="sync-meta">Not yet synced</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="toggle-sync" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="status-row">
+            <span class="status-dot idle" id="sync-status-dot"></span>
+            <span id="sync-status-text" class="status-text">Idle</span>
+          </div>
+        </div>
+
+        <!-- Scan window -->
+        <div class="card flex-1">
+          <div class="card-title" style="margin-bottom:14px">Scan Window</div>
+          <div class="field-row">
+            <div class="field-group">
+              <label class="field-label">From date</label>
+              <input type="date" id="input-scan-from" class="field-input" />
+            </div>
+            <div class="field-group">
+              <label class="field-label">To date <span class="field-optional">(blank = ongoing)</span></label>
+              <input type="date" id="input-scan-to" class="field-input" />
+            </div>
+            <div style="display:flex;align-items:flex-end">
+              <button id="btn-set-date" class="btn btn-secondary">Apply</button>
+            </div>
+          </div>
+          <p id="scan-date-hint" class="hint-text" style="margin-top:10px">Leave "To" blank to scan continuously going forward.</p>
+        </div>
+      </div>
+
+      <!-- Live activity -->
+      <div class="card" style="margin-top:20px">
+        <div class="panel-header">
+          <span class="panel-title">Live Activity</span>
+          <div id="activity-running" class="running-badge hidden">
+            <span class="mini-spinner"></span>
+            <span id="activity-running-text">Scanning Gmail…</span>
+          </div>
+        </div>
+        <div id="activity-list" class="item-list">
+          <div class="empty-state">No emails processed yet.<br>Enable sync and click "Sync Now" to start.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ Back Up Links ═══ -->
+    <section id="section-backup" class="section hidden">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">Back Up Links</h1>
+          <p class="section-sub">Queue iCloud share links to back up directly to Google Photos</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:6px">Add Links</div>
+        <p class="hint-text" style="margin-bottom:16px">
+          Paste one URL or many (one per line). Each link becomes its own Google Photos album.
+          Leave the album name blank and we auto-generate one from the photo date and location.
+        </p>
+        <div class="add-link-grid">
+          <div class="field-group" style="grid-column:1/3">
+            <label class="field-label">iCloud share link(s)</label>
+            <textarea id="input-link-url" class="field-input field-textarea"
+              placeholder="https://share.icloud.com/photos/TOKEN&#10;https://share.icloud.com/photos/TOKEN&#10;…paste one or many"></textarea>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Album name <span class="field-optional">(blank = auto-generate from date + location)</span></label>
+            <input type="text" id="input-link-album" class="field-input" placeholder="e.g. 42 Oak Street inspection" />
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button id="btn-add-link" class="btn btn-primary" style="width:100%">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+              Add to Queue
+            </button>
+          </div>
+        </div>
+        <p id="add-link-hint" class="hint-text hidden" style="margin-top:8px"></p>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="panel-header">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="panel-title">Queue</span>
+            <span id="queue-count" class="badge">0</span>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button id="btn-clear-queue" class="btn btn-ghost btn-sm">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+              Clear All
+            </button>
+            <button id="btn-backup-all" class="btn btn-primary btn-sm" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+              Back Up All
+            </button>
+          </div>
+        </div>
+        <div id="queue-list" class="item-list">
+          <div class="empty-state">No links queued yet. Add some above.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ History ═══ -->
+    <section id="section-history" class="section hidden">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">History</h1>
+          <p class="section-sub">All processed iCloud backup jobs</p>
+        </div>
+        <button id="btn-export" class="btn btn-secondary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+          Export CSV
+        </button>
+      </div>
+      <div class="card">
+        <div id="history-list" class="item-list">
+          <div class="empty-state">Loading…</div>
+        </div>
+        <div class="pagination hidden" id="history-pagination">
+          <button id="btn-hist-prev" class="btn btn-ghost btn-sm" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+            Previous
+          </button>
+          <span id="hist-page-label" class="page-label">Page 1</span>
+          <button id="btn-hist-next" class="btn btn-ghost btn-sm">
+            Next
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ Settings ═══ -->
+    <section id="section-settings" class="section hidden">
+      <div class="section-header">
+        <div>
+          <h1 class="section-title">Settings</h1>
+          <p class="section-sub">Configure album naming and backup notifications</p>
+        </div>
+      </div>
+
+      <!-- Album naming -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom:6px">Album Naming</div>
+        <p class="hint-text" style="margin-bottom:18px">
+          Control how Google Photos albums are named.
+          Use <code>{date}</code> and <code>{location}</code> as tokens.
+        </p>
+        <div class="field-row" style="margin-bottom:16px;align-items:flex-end">
+          <div class="field-group" style="max-width:220px">
+            <label class="field-label">Date to use</label>
+            <select id="select-album-date-source" class="field-input">
+              <option value="received">Email received date</option>
+              <option value="exif">Photo taken date (EXIF)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Name pattern</label>
+            <input type="text" id="input-album-pattern" class="field-input" placeholder="Auto Backup - {date} - {location}" />
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+          <button id="btn-save-album-settings" class="btn btn-primary btn-sm">Save</button>
+          <span id="album-settings-hint" class="hint-text hidden"></span>
+        </div>
+        <p class="hint-text">
+          Preview: <strong id="album-name-preview" style="color:#111827">Auto Backup - 2024-07-15 - London, England</strong>
+        </p>
+      </div>
+
+      <!-- Notify on backup -->
+      <div class="card" style="margin-top:18px">
+        <div class="card-title">Notify on Backup</div>
+        <p class="hint-text" style="margin-top:4px;margin-bottom:16px">
+          After each album is uploaded, we create a public share link and email it to these addresses.
+          Make sure you've clicked <strong>Reconnect</strong> to grant sharing permissions.
+        </p>
+        <div id="share-emails-list" class="share-emails-list"></div>
+        <div class="field-row" style="margin-top:14px">
+          <div class="field-group">
+            <label class="field-label">Add recipient</label>
+            <input type="email" id="input-share-email" class="field-input" placeholder="recipient@example.com" />
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button id="btn-add-email" class="btn btn-primary">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+              Add
+            </button>
+          </div>
+        </div>
+        <p id="share-email-hint" class="hint-text hidden" style="margin-top:8px"></p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── Connect overlay ── -->
+  <div id="overlay-disconnected" class="overlay hidden">
+    <div class="overlay-card">
+      <div class="overlay-icon">
+        <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg>
+      </div>
+      <h2 class="overlay-title">Connect your Gmail</h2>
+      <p class="overlay-sub">Sign in with Google to start automatically backing up iCloud photo shares to Google Photos.</p>
+      <a id="btn-connect" href="/auth/google" class="btn btn-primary btn-full">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>
+        Sign in with Google
+      </a>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

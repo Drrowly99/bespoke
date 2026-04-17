@@ -1,0 +1,99 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  background: #ffffff;
+  color: #1e293b;
+  width: 260px;
+  padding: 0 0 12px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.logo { width: 28px; height: 28px; border-radius: 6px; }
+.app-name { font-weight: 700; font-size: 14px; display: block; color: #0f172a; }
+.app-sub  { font-size: 11px; color: #94a3b8; display: block; }
+
+.hidden { display: none !important; }
+
+#view-loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+#view-connected,
+#view-disconnected {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.account-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.account-email { font-size: 12px; color: #475569; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.active      { background: #22c55e; box-shadow: 0 0 5px #22c55e80; }
+.status-dot.paused      { background: #94a3b8; }
+.status-dot.idle        { background: #94a3b8; }
+.status-dot.processing  { background: #3b82f6; animation: blink .8s infinite; }
+.status-dot.token_error { background: #ef4444; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+.status-label { font-size: 12px; color: #64748b; text-align: center; }
+
+.btn {
+  width: 100%;
+  padding: 9px 14px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: opacity .15s;
+}
+.btn:hover { opacity: .85; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn-primary   { background: #3b82f6; color: #fff; }
+.btn-secondary { background: #f1f5f9; color: #1e293b; }
+
+.hint { font-size: 12px; color: #64748b; line-height: 1.5; }
+
+.detected-hint {
+  font-size: 11px;
+  color: #2563eb;
+  background: #dbeafe;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.connect-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #2563eb;
+}
+
+.mini-spinner {
+  display: inline-block; width: 13px; height: 13px;
+  border: 2px solid #dbeafe; border-top-color: #3b82f6;
+  border-radius: 50%; animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

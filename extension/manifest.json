@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "iCloud → Google Photos Backup",
+  "version": "1.0.0",
+  "description": "Automatically backs up iCloud photo share links to Google Photos",
+  "permissions": ["storage", "alarms", "notifications", "identity", "tabs"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "https://share.icloud.com/*",
+    "https://www.icloud.com/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
