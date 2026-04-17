@@ -9,7 +9,7 @@
  *  If they switch Chrome profiles or the session expires, they see the Connect screen.
  */
 
-const BACKEND = 'http://localhost:3000';
+const BACKEND = 'http://localhost:4000';
 const HEALTH_ALARM = 'health-check';
 const HEALTH_INTERVAL_MINUTES = 5;
 
