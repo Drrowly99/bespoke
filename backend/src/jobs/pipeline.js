@@ -15,7 +15,7 @@ import { logger } from '../utils/logger.js';
  *    (covers restarts that happened after INSERT but before processLink ran).
  */
 export async function resumePendingLinks(userId) {
-  const staleThreshold = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const staleThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
   const { data: reset } = await supabase
     .from('processed_emails')
@@ -192,6 +192,10 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
 
       let exifDate = null;
       for (const asset of assets) {
+        // Only try EXIF on images (prevents 'Unknown file format' warnings on videos)
+        const isImage = asset.mimeType?.startsWith('image/');
+        if (!isImage) continue;
+
         try {
           const slice = await fetchExifSlice(asset.url);
           // Extract geolocation and taken-date from the same EXIF slice

@@ -12,7 +12,6 @@
  */
 import { fetch } from 'undici';
 import { Readable } from 'stream';
-import sharp from 'sharp';
 import { google } from 'googleapis';
 import { buildAuthedClient } from '../auth/google.js';
 import { loadTokens, updateAccessToken } from '../auth/tokens.js';
@@ -23,7 +22,6 @@ import { withRetry } from '../utils/sleep.js';
 const PHOTOS_BASE = 'https://photoslibrary.googleapis.com/v1';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;   // 20 MB — Google Photos hard limit per file
 const CHUNK_BYTES = 50 * 1024 * 1024;   // 50 MB per upload chunk
-const JPEG_QUALITY = 80;                 // 80% quality ≈ 20% smaller file
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -61,7 +59,7 @@ export async function uploadToGooglePhotos(userId, { assets, albumName, descript
       const idx = ++globalIndex;
       onProgress?.(asset.filename, idx, sorted.length);
       try {
-        return await withRetry(() => compressAndUpload(accessToken, asset));
+        return await withRetry(() => fetchAndUpload(accessToken, asset));
       } catch (err) {
         logger.error('Asset upload failed', { filename: asset.filename, message: err.message });
         return null;
@@ -170,7 +168,8 @@ export function buildAlbumName(receivedDate, geolocation, emailSubject, {
 
 // ── Compression + upload ──────────────────────────────────────────────────────
 
-async function compressAndUpload(accessToken, asset) {
+// ── Fetch + upload (Original Quality) ───────────────────────────────────────
+async function fetchAndUpload(accessToken, asset) {
   // Fetch raw bytes from iCloud CDN
   const res = await fetch(asset.url, {
     headers: { 'User-Agent': USER_AGENT },
@@ -186,20 +185,10 @@ async function compressAndUpload(accessToken, asset) {
   }
 
   const raw = Buffer.from(await res.arrayBuffer());
-
-  // Compress to JPEG at quality 80 (≈20% size reduction, good visual quality)
-  let compressed = raw;
-  let filename = asset.filename.replace(/\.(heic|heif|png|webp)$/i, '.jpg');
-  try {
-    compressed = await sharp(raw).jpeg({ quality: JPEG_QUALITY, mozjpeg: false }).toBuffer();
-    console.log(`[COMPRESS] ${asset.filename} ${kb(raw)} - ${kb(compressed)} KB`);
-  } catch (err) {
-    logger.warn('Compression skipped', { filename: asset.filename, message: err.message });
-    filename = asset.filename; // keep original extension if sharp failed
-  }
-
-  const stream = Readable.toWeb(Readable.from(compressed));
-  return uploadRawBytes(accessToken, stream, compressed.length, filename, 'image/jpeg');
+  const stream = Readable.toWeb(Readable.from(raw));
+  
+  console.log(`[FETCH] ${asset.filename} — ${kb(raw)} KB (Original Quality)`);
+  return uploadRawBytes(accessToken, stream, raw.length, asset.filename, asset.mimeType || 'image/jpeg');
 }
 
 async function uploadRawBytes(accessToken, stream, contentLength, filename, mimeType) {
@@ -232,8 +221,8 @@ function chunkBySize(assets, maxBytes) {
   let currentBytes = 0;
 
   for (const asset of assets) {
-    // Use declared size; estimate 80% after compression if known
-    const estimatedSize = asset.size ? Math.round(asset.size * 0.8) : 2 * 1024 * 1024;
+    // Use 100% of declared size for original quality uploads
+    const estimatedSize = asset.size || 2 * 1024 * 1024;
 
     if (currentBytes + estimatedSize > maxBytes && current.length > 0) {
       chunks.push(current);
@@ -307,8 +296,13 @@ async function createMediaItemsBatch(accessToken, albumId, tokens, description) 
   const results = (data.newMediaItemResults || []).filter(r => r.status?.message === 'Success' || !r.status?.message);
 
   if (results.length < tokens.length) {
-    logger.warn('Some batch items failed', { failed: tokens.length - results.length });
+    const failures = (data.newMediaItemResults || []).filter(r => r.status?.message && r.status.message !== 'Success');
+    failures.forEach(f => {
+      logger.warn('Google Photos item failed to save', { message: f.status.message, code: f.status.code });
+      console.warn(`[UPLOAD] Item failed: ${f.status.message} (code: ${f.status.code})`);
+    });
   }
+
   return results;
 }
 

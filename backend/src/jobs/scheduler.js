@@ -9,7 +9,7 @@ import { startRun, setFound, endRun } from './sync-state.js';
 import { appendScanLog } from '../utils/scan-log.js';
 import { logger } from '../utils/logger.js';
 
-const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL_MS || '180000', 10); // 3 min default
+const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL_MS || '600000', 10); // 10 min default
 
 let schedulerHandle = null;
 

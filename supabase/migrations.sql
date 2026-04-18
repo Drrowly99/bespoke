@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
   user_id              UUID REFERENCES users(id) ON DELETE CASCADE UNIQUE,
   icloud_sync_enabled  BOOLEAN DEFAULT FALSE,
   sync_status          TEXT DEFAULT 'idle',  -- idle | active | paused | token_error
-  scan_from_date       DATE DEFAULT CURRENT_DATE,
+  scan_from_date       DATE DEFAULT NULL,
   scan_to_date         DATE DEFAULT NULL,    -- NULL = no upper limit, scan forever forward
   share_emails         JSONB DEFAULT '[]',  -- email addresses to notify after each album upload
   album_date_source    TEXT DEFAULT 'received',  -- 'received' | 'exif' — which date to use in album name

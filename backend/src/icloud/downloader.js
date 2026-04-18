@@ -166,31 +166,38 @@ export async function getAssetReadable(url, declaredMime) {
 function extractAsset(record) {
   const f = record.fields;
 
-  const medRes  = f.resJPEGMedRes?.value;
+  const medRes = f.resJPEGMedRes?.value;
   const origRes = f.resOriginalRes?.value;
 
-  // Prefer medium JPEG — good quality, smaller, no HEIC conversion needed
-  const chosen  = medRes || origRes;
+  // Prioritize original master record (HEIC/Original JPEG) over medium JPEG
+  const chosen = origRes || medRes;
   if (!chosen?.downloadURL) return null;
 
-  const isJpeg    = !!medRes;
-  const fileToken = isJpeg ? 'public.jpeg' : (f.resOriginalFileType?.value || 'public.heic');
+  const isOrig = !!origRes;
+  const fileToken = isOrig ? (f.resOriginalFileType?.value || 'public.heic') : 'public.jpeg';
 
   // ${f} is Apple's placeholder for the file type string in the CDN URL
   const url = chosen.downloadURL.replace('${f}', fileToken);
 
-  // filenameEnc is base64(utf8 filename) despite the ENCRYPTED_BYTES label
+  // filenameEnc is base64(utf8 filename)
   let filename;
   try {
     const raw = Buffer.from(f.filenameEnc?.value || '', 'base64').toString('utf8');
-    filename  = isJpeg ? raw.replace(/\.(heic|heif)$/i, '.jpg') : raw;
+    filename = raw;
   } catch {
-    filename = `photo_${record.recordName}.jpg`;
+    const ext = isOrig ? (f.resOriginalFileType?.value?.split('.').pop() || 'heic') : 'jpg';
+    filename = `photo_${record.recordName}.${ext}`;
   }
 
-  const mimeType = isJpeg
-    ? 'image/jpeg'
-    : (f.itemType?.value === 'public.heic' ? 'image/heic' : 'image/jpeg');
+  const rawMime = f.itemType?.value || '';
+  const fileType = f.resOriginalFileType?.value || '';
+  
+  let mimeType = 'image/jpeg'; // fallback
+  if (rawMime.includes('heic')) mimeType = 'image/heic';
+  else if (rawMime.includes('quicktime') || fileType.includes('quicktime') || filename.toLowerCase().endsWith('.mov')) mimeType = 'video/quicktime';
+  else if (rawMime.includes('mpeg4') || fileType.includes('mpeg4') || filename.toLowerCase().endsWith('.mp4')) mimeType = 'video/mp4';
+  else if (rawMime.includes('jpeg') || fileType.includes('jpeg')) mimeType = 'image/jpeg';
+  else if (isOrig) mimeType = 'image/jpeg'; // default for original if unknown but orig exists
 
   const size     = chosen.size || null;
   const exifDate = f.originalCreationDate?.value

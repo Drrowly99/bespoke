@@ -29,7 +29,7 @@ export async function fetchNewICloudEmails(userId) {
 
   // Load user row + settings in parallel
   const [{ data: userRow }, { data: settings }] = await Promise.all([
-    supabase.from('users').select('last_message_id').eq('id', userId).single(),
+    supabase.from('users').select('last_message_id, connected_at').eq('id', userId).single(),
     supabase.from('user_settings').select('scan_from_date, scan_to_date').eq('user_id', userId).single(),
   ]);
 
@@ -119,11 +119,14 @@ async function resolveAfterEpoch(gmail, userRow, settings) {
     return Math.floor(new Date(settings.scan_from_date).getTime() / 1000);
   }
 
-  // Priority 3: 30 days ago (safe default — covers recent emails without full history scan)
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  thirtyDaysAgo.setHours(0, 0, 0, 0);
-  return Math.floor(thirtyDaysAgo.getTime() / 1000);
+  // Priority 3: Previous day 12:00 AM (relative to connection or now)
+  // Ensures we catch emails that arrived just before they signed up
+  const refDate = userRow?.connected_at ? new Date(userRow.connected_at) : new Date();
+  const yesterday = new Date(refDate);
+  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setHours(0, 0, 0, 0);
+
+  return Math.floor(yesterday.getTime() / 1000);
 }
 
 async function getEpochFromMessageId(gmail, messageId) {
