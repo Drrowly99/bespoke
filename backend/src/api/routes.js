@@ -9,6 +9,48 @@ import { logger } from '../utils/logger.js';
 
 const router = Router();
 
+router.get('/accounts', async (_req, res) => {
+  const [usersResult, settingsResult, sessionsResult] = await Promise.all([
+    supabase.from('users').select('id, email, connected_at, last_sync, is_locked').order('connected_at', { ascending: false }),
+    supabase.from('user_settings').select('user_id, icloud_sync_enabled, sync_status'),
+    supabase.from('sessions').select('user_id, token, expires_at, created_at').order('created_at', { ascending: false }),
+  ]);
+
+  const { data: users, error: usersError } = usersResult;
+  const { data: settings, error: settingsError } = settingsResult;
+  const { data: sessions, error: sessionsError } = sessionsResult;
+  if (usersError || settingsError || sessionsError) {
+    return res.status(500).json({ error: (usersError || settingsError || sessionsError).message });
+  }
+
+  const settingsByUserId = new Map((settings || []).map((row) => [row.user_id, row]));
+  const sessionByUserId = new Map();
+  const now = new Date();
+  for (const row of sessions || []) {
+    if (sessionByUserId.has(row.user_id)) continue;
+    if (!row.expires_at || new Date(row.expires_at) < now) continue;
+    sessionByUserId.set(row.user_id, row);
+  }
+
+  res.json({
+    accounts: (users || []).map((user) => {
+      const setting = settingsByUserId.get(user.id) || null;
+      const session = sessionByUserId.get(user.id) || null;
+      return {
+        id: user.id,
+        email: user.email,
+        connectedAt: user.connected_at,
+        lastSync: user.last_sync,
+        isLocked: user.is_locked,
+        syncEnabled: setting?.icloud_sync_enabled ?? false,
+        syncStatus: setting?.sync_status ?? 'idle',
+        sessionToken: session?.token ?? null,
+        sessionExpiresAt: session?.expires_at ?? null,
+      };
+    }),
+  });
+});
+
 // All API routes require authentication — except /logs/export which supports
 // a ?_t= query-param token so Chrome can open it as a direct tab download.
 router.use((req, res, next) => {
@@ -47,21 +89,16 @@ router.post('/sync/toggle', async (req, res) => {
   if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be boolean' });
 
   const { error } = await supabase.from('user_settings').upsert(
-    { user_id: req.userId, icloud_sync_enabled: enabled, sync_status: enabled ? 'active' : 'paused', updated_at: new Date().toISOString() },
+    {
+      user_id: req.userId,
+      icloud_sync_enabled: enabled,
+      sync_status: enabled ? 'active' : 'paused',
+      updated_at: new Date().toISOString(),
+    },
     { onConflict: 'user_id' }
   );
   if (error) return res.status(500).json({ error: error.message });
   logger.info('Sync toggled', { userId: req.userId, enabled });
-
-  // When enabled, kick off an immediate scan so the user sees results straight away
-  if (enabled) {
-    const state = getState(req.userId);
-    if (!state.running) {
-      pollUserNow(req.userId).catch((err) =>
-        logger.error('auto run-now on toggle error', { userId: req.userId, message: err.message })
-      );
-    }
-  }
 
   res.json({ ok: true, syncEnabled: enabled });
 });
@@ -70,15 +107,27 @@ router.post('/sync/toggle', async (req, res) => {
 // Triggers an immediate poll for the current user without waiting for the scheduler.
 // Returns instantly — the poll runs in the background.
 router.post('/sync/run-now', async (req, res) => {
+  const { data: settings, error } = await supabase
+    .from('user_settings')
+    .select('scan_from_date, scan_to_date')
+    .eq('user_id', req.userId)
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!settings?.scan_from_date) {
+    return res.status(400).json({ error: 'startDate is required before running sync' });
+  }
+
   const state = getState(req.userId);
   if (state.running) {
     return res.json({ ok: true, alreadyRunning: true });
   }
-  // Fire and forget — don't await so the HTTP response returns immediately
+
   pollUserNow(req.userId).catch((err) =>
     logger.error('run-now error', { userId: req.userId, message: err.message })
   );
-  res.json({ ok: true, started: true });
+
+  res.json({ ok: true, started: true, scanFromDate: settings.scan_from_date, scanToDate: settings.scan_to_date || todayISO() });
 });
 
 // ── POST /api/sync/process-link ───────────────────────────────────────────────
@@ -86,17 +135,19 @@ router.post('/sync/run-now', async (req, res) => {
 // Body: { icloudUrl: "https://share.icloud.com/photos/..." }
 // Returns immediately — processing runs in the background.
 router.post('/sync/process-link', async (req, res) => {
-  const { icloudUrl, albumName } = req.body;
-  if (!icloudUrl || !icloudUrl.includes('icloud.com')) {
-    return res.status(400).json({ error: 'icloudUrl is required' });
+  const { icloudUrl, icloudUrls, albumName } = req.body;
+  const urls = Array.isArray(icloudUrls) ? icloudUrls : [icloudUrl];
+  const validUrls = [...new Set(urls.map(u => typeof u === 'string' ? u.trim() : '').filter(u => u.includes('icloud.com')))];
+  if (!validUrls.length) {
+    return res.status(400).json({ error: 'icloudUrl or icloudUrls is required' });
   }
 
-  logger.info('Manual link trigger', { userId: req.userId, icloudUrl, albumName });
-  processDirectLink(req.userId, icloudUrl, { albumName: albumName?.trim() || null }).catch((err) =>
+  logger.info('Manual link trigger', { userId: req.userId, count: validUrls.length, albumName });
+  processDirectLink(req.userId, validUrls.length === 1 ? validUrls[0] : validUrls, { albumName: albumName?.trim() || null }).catch((err) =>
     logger.error('process-link error', { userId: req.userId, message: err.message })
   );
 
-  res.json({ ok: true, icloudUrl, message: 'Processing started — check /api/sync/progress' });
+  res.json({ ok: true, icloudUrls: validUrls, message: 'Processing started — check /api/sync/progress' });
 });
 
 // ── GET /api/sync/progress ────────────────────────────────────────────────────
@@ -155,10 +206,12 @@ router.post('/settings/scan-date', async (req, res) => {
     return res.status(400).json({ error: 'endDate must be on or after startDate' });
   }
 
+  const effectiveEndDate = endDate || new Date().toISOString().slice(0, 10);
+
   const updates = {
     user_id:        req.userId,
     scan_from_date: startDate,
-    scan_to_date:   endDate,
+    scan_to_date:   effectiveEndDate,
     updated_at:     new Date().toISOString(),
   };
 
@@ -172,7 +225,7 @@ router.post('/settings/scan-date', async (req, res) => {
     return res.status(500).json({ error: (settingsErr || usersErr).message });
   }
   logger.info('Scan window updated', { userId: req.userId, startDate, endDate });
-  res.json({ ok: true, scanFromDate: startDate, scanToDate: endDate });
+  res.json({ ok: true, scanFromDate: startDate, scanToDate: effectiveEndDate });
 });
 
 // ── GET /api/settings/share-emails ───────────────────────────────────────────
@@ -306,6 +359,10 @@ router.get('/logs/export', async (req, res) => {
 function csvCell(val) {
   if (val == null) return '';
   return `"${String(val).replace(/"/g, '""')}"`;
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export default router;

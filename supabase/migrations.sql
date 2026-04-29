@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
   icloud_sync_enabled  BOOLEAN DEFAULT FALSE,
   sync_status          TEXT DEFAULT 'idle',  -- idle | active | paused | token_error
   scan_from_date       DATE DEFAULT NULL,
-  scan_to_date         DATE DEFAULT NULL,    -- NULL = no upper limit, scan forever forward
+  scan_to_date         DATE DEFAULT NULL,    -- UI treats blank as today's date unless overridden
   share_emails         JSONB DEFAULT '[]',  -- email addresses to notify after each album upload
   album_date_source    TEXT DEFAULT 'received',  -- 'received' | 'exif' — which date to use in album name
   album_name_pattern   TEXT DEFAULT 'Auto Backup - {date} - {location}',  -- template tokens: {date} {location}
@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS processed_emails (
   caption          TEXT,                     -- human note from iCloud share email
   icloud_url       TEXT,
   share_token      TEXT,                     -- bare token from URL for dedup
+  google_album_id  TEXT,
   google_album_url TEXT,
   geolocation      JSONB,                    -- { latitude, longitude, address }
   property_label   TEXT,                     -- geocoded address or email subject
@@ -75,6 +76,8 @@ CREATE TABLE IF NOT EXISTS processed_emails (
   total_links      INTEGER DEFAULT 1,        -- total iCloud links in the source email
   total_assets     INTEGER,                  -- number of files in the iCloud share
   uploaded_assets  INTEGER,                  -- number of files successfully uploaded
+  asset_manifest   JSONB,                    -- resolved iCloud asset descriptors
+  upload_manifest  JSONB,                    -- per-file upload/save status
   -- One row per (user, email, link)
   UNIQUE(user_id, message_id, icloud_url)
 );
@@ -121,6 +124,9 @@ ALTER TABLE geocoding_cache    ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS total_links INTEGER DEFAULT 1;
 -- ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS total_assets INTEGER;
 -- ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS uploaded_assets INTEGER;
+-- ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS google_album_id TEXT;
+-- ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS asset_manifest JSONB;
+-- ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS upload_manifest JSONB;
 -- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS scan_from_date DATE DEFAULT CURRENT_DATE;
 -- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS scan_to_date DATE DEFAULT NULL;
 -- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS share_emails JSONB DEFAULT '[]';

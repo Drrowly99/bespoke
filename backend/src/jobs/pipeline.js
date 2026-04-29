@@ -1,9 +1,22 @@
 import { resolveICloudAssets, fetchExifSlice, extractShareToken } from '../icloud/downloader.js';
 import { extractGeolocation, extractExifDate } from '../icloud/exif.js';
-import { uploadToGooglePhotos, buildAlbumName } from '../photos/uploader.js';
+import { uploadToGooglePhotos, buildAlbumName, createAlbumForUser } from '../photos/uploader.js';
 import { setCurrentItem, setCurrentUpload, incrementDone } from './sync-state.js';
 import supabase from '../config/supabase.js';
 import { logger } from '../utils/logger.js';
+
+// ── Per-user sequential job lock ──────────────────────────────────────────────
+// Ensures only one album processes at a time per user, preventing Google Photos
+// rate limit issues when multiple links are submitted simultaneously.
+const userJobChain = new Map();
+
+function withUserLock(userId, fn) {
+  const prev = userJobChain.get(userId) || Promise.resolve();
+  let release;
+  const gate = new Promise(r => { release = r; });
+  userJobChain.set(userId, prev.then(() => gate));
+  return prev.then(() => fn()).finally(() => release());
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -15,7 +28,7 @@ import { logger } from '../utils/logger.js';
  *    (covers restarts that happened after INSERT but before processLink ran).
  */
 export async function resumePendingLinks(userId) {
-  const staleThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const staleThreshold = new Date(Date.now() - 30 * 60 * 1000).toISOString();
 
   const { data: reset } = await supabase
     .from('processed_emails')
@@ -46,7 +59,7 @@ export async function resumePendingLinks(userId) {
   console.log(`[PIPELINE] RESUME — ${pending.length} pending row(s) found, processing…`);
 
   for (const row of pending) {
-    await processLink(userId, row.id, {
+    await withUserLock(userId, () => processLink(userId, row.id, {
       subject: row.subject,
       sender: row.sender,
       caption: row.caption,
@@ -55,28 +68,34 @@ export async function resumePendingLinks(userId) {
       icloudUrl: row.icloud_url,
       linkIndex: row.link_index ?? 0,
       totalLinks: row.total_links ?? 1,
-    });
+    }));
   }
 }
 
-export async function processDirectLink(userId, icloudUrl, { albumName = null } = {}) {
-  const shareToken = extractShareToken(icloudUrl);
-  console.log(`[PIPELINE] Direct link — token=${shareToken ?? 'n/a'}${albumName ? ` | album="${albumName}"` : ''}`);
+export async function processDirectLink(userId, icloudUrlOrUrls, { albumName = null } = {}) {
+  const icloudUrls = Array.isArray(icloudUrlOrUrls) ? icloudUrlOrUrls : [icloudUrlOrUrls];
+  const normalizedUrls = icloudUrls.filter(Boolean);
+  const shareToken = normalizedUrls.length === 1 ? extractShareToken(normalizedUrls[0]) : null;
+  console.log(`[PIPELINE] Direct link — urls=${normalizedUrls.length}${shareToken ? ` token=${shareToken}` : ''}${albumName ? ` | album="${albumName}"` : ''}`);
+
+  const manualMessageId = `manual:${Date.now()}:${normalizedUrls.length}`;
+  const messageIcloudUrl = normalizedUrls.join('\n');
+  const rowShareToken = normalizedUrls.length === 1 ? shareToken : manualMessageId;
 
   const { data: queued, error: queueError } = await supabase
     .from('processed_emails')
     .insert({
       user_id: userId,
-      message_id: icloudUrl,
+      message_id: manualMessageId,
       sender: null,
       subject: albumName || 'Manual trigger',
       caption: albumName || null,
-      icloud_url: icloudUrl,
-      share_token: shareToken,
+      icloud_url: messageIcloudUrl,
+      share_token: rowShareToken,
       description: null,
       received_at: new Date().toISOString(),
       link_index: 0,
-      total_links: 1,
+      total_links: normalizedUrls.length,
       status: 'pending',
     })
     .select('id')
@@ -84,7 +103,7 @@ export async function processDirectLink(userId, icloudUrl, { albumName = null } 
 
   if (queueError) {
     if (queueError.code === '23505') {
-      console.log(`[PIPELINE] SKIP — already in DB token=${shareToken ?? icloudUrl}`);
+      console.log(`[PIPELINE] SKIP — already in DB token=${shareToken ?? normalizedUrls[0] ?? manualMessageId}`);
       return;
     }
     console.error(`[PIPELINE] Queue error — ${queueError.message}`);
@@ -92,16 +111,17 @@ export async function processDirectLink(userId, icloudUrl, { albumName = null } 
   }
 
   console.log(`[PIPELINE] QUEUED row=${queued.id}`);
-  await processLink(userId, queued.id, {
+  await withUserLock(userId, () => processLink(userId, queued.id, {
     subject: albumName || 'Manual trigger',
     sender: null,
     caption: albumName || null,
     body: null,
     receivedAt: new Date().toISOString(),
-    icloudUrl,
+    icloudUrls: normalizedUrls,
     linkIndex: 0,
-    totalLinks: 1,
-  });
+    totalLinks: normalizedUrls.length,
+    albumName,
+  }));
 }
 
 export async function processEmail(userId, emailData) {
@@ -142,46 +162,85 @@ export async function processEmail(userId, emailData) {
     }
 
     console.log(`[PIPELINE] QUEUED row=${queued.id} token=${shareToken}`);
-    await processLink(userId, queued.id, {
+    await withUserLock(userId, () => processLink(userId, queued.id, {
       messageId, subject, sender, caption, body, receivedAt,
       icloudUrl,
       linkIndex: idx,
       totalLinks: icloudUrls.length,
-    });
+    }));
   }
 }
 
 // ── Internal processing ───────────────────────────────────────────────────────
 
-async function processLink(userId, rowId, { subject, sender, caption, body, receivedAt, icloudUrl, linkIndex, totalLinks }) {
-  // Claim the pending row move to 'processing'
+async function processLink(userId, rowId, { subject, sender, caption, body, receivedAt, icloudUrl = null, icloudUrls = null, linkIndex = 0, totalLinks = 1, albumName = null } = {}) {
+  // Claim the pending row — move to 'processing'
   const { error: claimError } = await supabase
     .from('processed_emails')
     .update({ status: 'processing' })
     .eq('id', rowId)
-    .eq('status', 'pending');
+    .eq('status', 'pending')
+    .select('id')
+    .single();
 
   if (claimError) {
     console.error(`[PIPELINE] Claim failed row=${rowId} — ${claimError.message}`);
     return;
   }
 
-  const shareToken = extractShareToken(icloudUrl);
+  // Read any progress saved by a previous attempt (album ID, already-uploaded files)
+  const { data: savedRow } = await supabase
+    .from('processed_emails')
+    .select('google_album_id, upload_manifest, asset_manifest')
+    .eq('id', rowId)
+    .single();
+
+  const sourceUrls = (icloudUrls?.length
+    ? icloudUrls
+    : String(icloudUrl || '')
+        .split(/[\n\r]+/)
+        .map(u => u.trim())
+        .filter(Boolean)
+  ).filter(Boolean);
+  const shareToken = extractShareToken(icloudUrl || sourceUrls[0] || '');
   console.log(`[PIPELINE] START row=${rowId} token=${shareToken ?? 'n/a'}`);
+
+  // Resume state from previous attempt
+  let googleAlbumId  = savedRow?.google_album_id  || null;
+  let savedManifest  = savedRow?.upload_manifest  || [];
+  const alreadyDone  = new Set(savedManifest.filter(e => e.status === 'saved').map(e => e.filename));
+  if (alreadyDone.size) {
+    console.log(`[PIPELINE] RESUME — ${alreadyDone.size} files already saved, continuing from there`);
+  }
 
   let status = 'processing';
   let googleAlbumUrl = null;
   let geolocationData = null;
   let errorReason = null;
   let totalAssets = 0;
-  let uploadedAssets = 0;
+  let uploadedAssets = alreadyDone.size; // count already-saved files toward total
+  let assetManifest = savedRow?.asset_manifest || null;
+  let uploadManifest = savedManifest;
 
   try {
     setCurrentItem(userId, `${sender || 'Unknown'} · ${subject || '(no subject)'}`);
 
     console.log(`[PIPELINE] Resolving iCloud assets…`);
-    const assets = await resolveICloudAssets(icloudUrl);
+    const resolvedAssets = [];
+    for (const url of sourceUrls) {
+      const assets = await resolveICloudAssets(url);
+      resolvedAssets.push(...assets);
+    }
+
+    const assetMap = new Map();
+    for (const asset of resolvedAssets) {
+      const key = asset.url || asset.filename;
+      if (!assetMap.has(key)) assetMap.set(key, asset);
+    }
+
+    const assets = Array.from(assetMap.values());
     totalAssets = assets.length;
+    assetManifest = assets;
 
     if (!assets.length) {
       errorReason = 'No downloadable assets (link may be expired or empty)';
@@ -192,13 +251,10 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
 
       let exifDate = null;
       for (const asset of assets) {
-        // Only try EXIF on images (prevents 'Unknown file format' warnings on videos)
         const isImage = asset.mimeType?.startsWith('image/');
         if (!isImage) continue;
-
         try {
           const slice = await fetchExifSlice(asset.url);
-          // Extract geolocation and taken-date from the same EXIF slice
           if (!geolocationData) {
             const geo = await extractGeolocation(slice);
             if (geo) geolocationData = geo;
@@ -206,7 +262,7 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
           if (!exifDate) {
             exifDate = await extractExifDate(slice);
           }
-          if (geolocationData && exifDate) break; // got everything we need
+          if (geolocationData && exifDate) break;
         } catch (err) {
           logger.warn('EXIF slice failed', { filename: asset.filename, message: err.message });
         }
@@ -214,7 +270,6 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
 
       console.log(`[PIPELINE] Geolocation: ${geolocationData?.address ?? 'none'} | Photo date: ${exifDate ? exifDate.slice(0, 10) : 'none'}`);
 
-      // Load per-user album naming preferences
       const { data: userSettings } = await supabase
         .from('user_settings')
         .select('album_date_source, album_name_pattern')
@@ -222,37 +277,67 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
         .single();
 
       const locationHint = caption || subject;
-      let albumName = buildAlbumName(receivedAt, geolocationData, locationHint, {
+      let resolvedAlbumName = albumName || buildAlbumName(receivedAt, geolocationData, locationHint, {
         dateSource: userSettings?.album_date_source || 'received',
         exifDate,
         pattern: userSettings?.album_name_pattern || undefined,
       });
-      if (totalLinks > 1) albumName += ` (${linkIndex + 1} of ${totalLinks})`;
+      if (!albumName && totalLinks > 1) resolvedAlbumName += ` (${linkIndex + 1} of ${totalLinks})`;
 
-      console.log(`[PIPELINE] Uploading ${assets.length} files album="${albumName}"`);
+      // Pre-create the album and persist its ID BEFORE uploading anything.
+      // This way a crash mid-upload still knows which album to resume into.
+      if (!googleAlbumId) {
+        googleAlbumId = await createAlbumForUser(userId, resolvedAlbumName);
+        await supabase
+          .from('processed_emails')
+          .update({ google_album_id: googleAlbumId })
+          .eq('id', rowId);
+        console.log(`[PIPELINE] Album ready id=${googleAlbumId} name="${resolvedAlbumName}"`);
+      } else {
+        console.log(`[PIPELINE] Reusing album id=${googleAlbumId} name="${resolvedAlbumName}"`);
+      }
 
-      const { albumUrl, uploadedCount } = await uploadToGooglePhotos(userId, {
+      console.log(`[PIPELINE] Uploading ${assets.length - alreadyDone.size} of ${assets.length} files (${alreadyDone.size} already done)`);
+
+      const { albumUrl, uploadedCount, uploadManifest: uploadLog } = await uploadToGooglePhotos(userId, {
         assets,
-        albumName,
-        description: body,
-        sortBy: 'exif_date',
+        albumId:       googleAlbumId,
+        skipFilenames: alreadyDone.size > 0 ? alreadyDone : null,
+        description:   body,
+        sortBy:        'exif_date',
         onProgress: (filename, current, total) => {
           console.log(`[UPLOAD]   ${current}/${total} — ${filename}`);
           setCurrentUpload(userId, filename, current, total);
         },
+        // Save progress to DB after every 50-item batchCreate batch
+        onBatchSaved: async (savedEntries) => {
+          // Merge new entries with any entries already saved from prior runs
+          const merged = [
+            ...savedManifest.filter(e => e.status === 'saved'),
+            ...savedEntries,
+          ];
+          uploadManifest = merged;
+          uploadedAssets = merged.length;
+          await supabase
+            .from('processed_emails')
+            .update({ upload_manifest: merged, uploaded_assets: merged.length })
+            .eq('id', rowId);
+          console.log(`[PIPELINE] Progress saved — ${merged.length}/${totalAssets} files done`);
+        },
       });
 
-      uploadedAssets = uploadedCount;
+      uploadedAssets = uploadedCount + alreadyDone.size;
       googleAlbumUrl = albumUrl;
+      uploadManifest = uploadLog;
 
-      if (uploadedCount >= assets.length) {
+      if (uploadedAssets >= totalAssets) {
         status = 'completed';
         incrementDone(userId);
-        console.log(`[PIPELINE] DONE — ${uploadedCount}/${assets.length} uploaded | ${albumUrl}`);
+        console.log(`[PIPELINE] DONE — ${uploadedAssets}/${totalAssets} uploaded | ${albumUrl}`);
       } else {
         status = 'failed';
-        errorReason = `Partial upload: ${uploadedCount} of ${assets.length} files succeeded`;
-        console.warn(`[PIPELINE] PARTIAL — ${uploadedCount}/${assets.length} | ${albumUrl}`);
+        errorReason = `Partial upload: ${uploadedAssets} of ${totalAssets} files succeeded`;
+        console.warn(`[PIPELINE] PARTIAL — ${uploadedAssets}/${totalAssets} | ${albumUrl}`);
       }
     }
   } catch (err) {
@@ -272,11 +357,14 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
       status,
       error_reason: errorReason,
       google_album_url: googleAlbumUrl,
+      google_album_id:  googleAlbumId,
       geolocation: geolocationData,
       property_label: propertyLabel,
       export_ready: status === 'completed',
       total_assets: totalAssets,
       uploaded_assets: uploadedAssets,
+      asset_manifest: assetManifest,
+      upload_manifest: uploadManifest,
     })
     .eq('id', rowId);
 

@@ -3,11 +3,63 @@ import { getAuthUrl, exchangeCode, createOAuthClient } from './google.js';
 import { createSession, deleteSession, resolveSession } from './session.js';
 import { saveTokens } from './tokens.js';
 import { depositSession, consumeSession } from './states.js';
-import { pollUserNow } from '../jobs/scheduler.js';
 import supabase from '../config/supabase.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
+
+// ── GET /auth/accounts — list all connected Gmail accounts ────────────────────
+// Unauthenticated bootstrap endpoint: returns every user that has a valid
+// (non-expired) session so the frontend picker can show them without a login.
+router.get('/accounts', async (req, res) => {
+  const now = new Date().toISOString();
+
+  const { data: sessions, error: sessErr } = await supabase
+    .from('sessions')
+    .select('token, user_id, expires_at')
+    .gt('expires_at', now);
+
+  if (sessErr) {
+    logger.error('[/auth/accounts] sessions query failed', { error: sessErr.message });
+    return res.json({ accounts: [] });
+  }
+
+  logger.info('[/auth/accounts] valid sessions found:', sessions?.length ?? 0);
+
+  if (!sessions?.length) return res.json({ accounts: [] });
+
+  const userIds = [...new Set(sessions.map(s => s.user_id))];
+
+  const { data: users, error: usersErr } = await supabase
+    .from('users')
+    .select('id, email, is_locked')
+    .in('id', userIds);
+
+  if (usersErr) {
+    logger.error('[/auth/accounts] users query failed', { error: usersErr.message });
+    return res.json({ accounts: [] });
+  }
+
+  logger.info('[/auth/accounts] users found:', users?.map(u => `${u.email} (locked:${u.is_locked})`));
+
+  const userMap = Object.fromEntries(
+    (users || []).filter(u => !u.is_locked).map(u => [u.id, u.email])
+  );
+
+  // One token per user — first valid session wins
+  const seen = new Set();
+  const accounts = [];
+  for (const s of sessions) {
+    if (seen.has(s.user_id)) continue;
+    const email = userMap[s.user_id];
+    if (!email) continue;
+    seen.add(s.user_id);
+    accounts.push({ email, token: s.token });
+  }
+
+  logger.info('[/auth/accounts] returning accounts:', accounts.map(a => a.email));
+  res.json({ accounts });
+});
 
 // ── Step 1: Start OAuth flow ──────────────────────────────────────────────────
 // The extension always adds ?state=RANDOM_TOKEN so we can deliver the session
@@ -48,30 +100,16 @@ router.get('/google/callback', async (req, res) => {
     await saveTokens(user.id, tokens);
     const sessionToken = await createSession(user.id);
 
-    // Always re-enable sync on every connect so the user is never stuck in 'idle'.
-    // Preserve any existing scan_from_date the user already configured.
+    // Keep new connections idle until the user explicitly sets a scan window
+    // and clicks Sync Now.
     await supabase.from('user_settings').upsert(
       {
         user_id:             user.id,
-        icloud_sync_enabled: true,
-        sync_status:         'active',
+        icloud_sync_enabled: false,
+        sync_status:         'idle',
         updated_at:          new Date().toISOString(),
       },
       { onConflict: 'user_id' }
-    );
-
-    // Seed scan_from_date to 30 days ago only when the row has no date yet.
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    await supabase
-      .from('user_settings')
-      .update({ scan_from_date: thirtyDaysAgo.toISOString().slice(0, 10) })
-      .eq('user_id', user.id)
-      .is('scan_from_date', null);
-
-    // Kick off an immediate scan in the background so the user sees results right away
-    pollUserNow(user.id).catch((err) =>
-      logger.warn('Initial scan error', { userId: user.id, message: err.message })
     );
 
     logger.info('User authenticated', { googleId, email });
@@ -148,7 +186,9 @@ router.post('/disconnect', async (req, res) => {
 // ── Session check ─────────────────────────────────────────────────────────────
 router.get('/me', async (req, res) => {
   const sessionToken = req.headers['x-session-token'];
+  logger.info('[/auth/me] token present:', !!sessionToken, '| prefix:', sessionToken?.slice(0, 8));
   const userId = await resolveSession(sessionToken);
+  logger.info('[/auth/me] resolved userId:', userId || 'null (invalid/expired)');
   if (!userId) return res.status(401).json({ error: 'Unauthenticated' });
 
   const { data: user } = await supabase

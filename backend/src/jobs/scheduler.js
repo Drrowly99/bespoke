@@ -15,10 +15,8 @@ let schedulerHandle = null;
 
 export function startPollingScheduler() {
   if (schedulerHandle) return;
-  logger.info('Polling scheduler started', { intervalMs: POLL_INTERVAL });
-  schedulerHandle = setInterval(runPollCycle, POLL_INTERVAL);
-  // Run immediately on startup
-  runPollCycle();
+  logger.info('Polling scheduler disabled until manual sync', { intervalMs: POLL_INTERVAL });
+  schedulerHandle = null;
 }
 
 export function stopPollingScheduler() {

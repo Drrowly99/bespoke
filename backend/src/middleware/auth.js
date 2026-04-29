@@ -10,7 +10,9 @@ import supabase from '../config/supabase.js';
 
 export async function requireAuth(req, res, next) {
   const token = req.headers['x-session-token'];
+  console.log(`[requireAuth] ${req.method} ${req.path} | token: ${token ? token.slice(0,8)+'...' : 'NONE'}`);
   const userId = await resolveSession(token);
+  console.log(`[requireAuth] → userId: ${userId || 'null (401)'}`);
   if (!userId) return res.status(401).json({ error: 'Unauthenticated' });
 
   // Check lock status — single lightweight query

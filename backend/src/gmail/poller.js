@@ -39,9 +39,10 @@ export async function fetchNewICloudEmails(userId) {
   // When scan_to_date is set, we also clear last_message_id logic so the window
   // is always [from, to] regardless of what was already processed.
   let q = `${ICLOUD_QUERY} after:${afterEpoch}`;
-  if (settings?.scan_to_date) {
-    // Gmail before: is exclusive, so add 1 day to include the end date itself
-    const toDate = new Date(settings.scan_to_date);
+  const endDate = settings?.scan_to_date || new Date().toISOString().slice(0, 10);
+  if (endDate) {
+    // Gmail before: is exclusive, so add 1 day to include the end date itself.
+    const toDate = new Date(endDate);
     toDate.setDate(toDate.getDate() + 1);
     const toEpoch = Math.floor(toDate.getTime() / 1000);
     q += ` before:${toEpoch}`;

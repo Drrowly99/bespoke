@@ -6,8 +6,9 @@ import { dirname, join } from 'path';
 import authRoutes from './auth/routes.js';
 import apiRoutes from './api/routes.js';
 import adminRoutes, { serveAdminDashboard } from './admin/routes.js';
-import { startPollingScheduler } from './jobs/scheduler.js';
 import { validateEnv } from './config/env.js';
+import supabase from './config/supabase.js';
+import { resumePendingLinks } from './jobs/pipeline.js';
 
 validateEnv();
 
@@ -73,9 +74,36 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[server] Listening on http://localhost:${PORT}`);
-  startPollingScheduler();
+
+  // On every startup, reset any rows stuck in 'processing' (from a crashed/killed
+  // previous run) back to 'pending', then re-queue them for all users.
+  try {
+    // Reset ALL processing rows immediately — server just started so none are live
+    await supabase
+      .from('processed_emails')
+      .update({ status: 'pending' })
+      .eq('status', 'processing');
+
+    // Find every user who has pending work and resume it
+    const { data: rows } = await supabase
+      .from('processed_emails')
+      .select('user_id')
+      .eq('status', 'pending');
+
+    const userIds = [...new Set((rows || []).map(r => r.user_id))];
+    if (userIds.length) {
+      console.log(`[server] Resuming interrupted uploads for ${userIds.length} user(s)…`);
+      for (const userId of userIds) {
+        resumePendingLinks(userId).catch(err =>
+          console.error(`[server] Resume failed for user ${userId}: ${err.message}`)
+        );
+      }
+    }
+  } catch (err) {
+    console.error('[server] Startup resume error:', err.message);
+  }
 });
 
 export default app;

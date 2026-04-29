@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import supabase from '../config/supabase.js';
 import { issueAdminToken, requireAdminToken } from './auth.js';
+import { pollUserNow } from '../jobs/scheduler.js';
+import { getState } from '../jobs/sync-state.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
@@ -48,6 +50,124 @@ router.get('/users', async (_req, res) => {
   }));
 
   res.json({ users });
+});
+
+router.get('/users/:id/context', async (req, res) => {
+  const { id } = req.params;
+
+  const [{ data: user }, { data: settings }, { data: recentItems }, syncState] = await Promise.all([
+    supabase.from('users').select('id, email, connected_at, last_sync, is_locked, locked_at, locked_reason, locked_by').eq('id', id).single(),
+    supabase.from('user_settings').select('icloud_sync_enabled, sync_status, scan_from_date, scan_to_date, share_emails, album_date_source, album_name_pattern').eq('user_id', id).single(),
+    supabase.from('processed_emails')
+      .select('id, sender, subject, caption, property_label, google_album_url, status, error_reason, received_at, created_at, total_links, link_index, total_assets, uploaded_assets')
+      .eq('user_id', id)
+      .order('created_at', { ascending: false })
+      .limit(15),
+    Promise.resolve(getState(id)),
+  ]);
+
+  if (!user) return res.status(404).json({ error: 'user_not_found' });
+
+  res.json({
+    user: {
+      id: user.id,
+      email: user.email,
+      connectedAt: user.connected_at,
+      lastSync: user.last_sync,
+      isLocked: user.is_locked,
+      lockedAt: user.locked_at,
+      lockedReason: user.locked_reason,
+      lockedBy: user.locked_by,
+    },
+    settings: {
+      syncEnabled: settings?.icloud_sync_enabled ?? false,
+      syncStatus: settings?.sync_status ?? 'idle',
+      scanFromDate: settings?.scan_from_date ?? null,
+      scanToDate: settings?.scan_to_date ?? null,
+      shareEmails: settings?.share_emails ?? [],
+      albumDateSource: settings?.album_date_source ?? 'received',
+      albumNamePattern: settings?.album_name_pattern ?? 'Auto Backup - {date} - {location}',
+    },
+    sync: {
+      running: syncState.running,
+      phase: syncState.phase,
+      currentItem: syncState.currentItem,
+      found: syncState.found,
+      done: syncState.done,
+      lastRunAt: syncState.lastRunAt,
+      lastRunFound: syncState.lastRunFound,
+      lastRunDone: syncState.lastRunDone,
+    },
+    recentItems: recentItems || [],
+  });
+});
+
+router.post('/users/:id/sync/run-now', async (req, res) => {
+  const { id } = req.params;
+  const { data: settings, error } = await supabase
+    .from('user_settings')
+    .select('scan_from_date, scan_to_date')
+    .eq('user_id', id)
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!settings?.scan_from_date) {
+    return res.status(400).json({ error: 'startDate is required before running sync' });
+  }
+
+  const state = getState(id);
+  if (state.running) return res.json({ ok: true, alreadyRunning: true });
+
+  pollUserNow(id).catch((err) => logger.error('admin run-now error', { userId: id, message: err.message }));
+  res.json({ ok: true, started: true });
+});
+
+router.post('/users/:id/sync/toggle', async (req, res) => {
+  const { id } = req.params;
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be boolean' });
+
+  const { error } = await supabase.from('user_settings').upsert(
+    {
+      user_id: id,
+      icloud_sync_enabled: enabled,
+      sync_status: enabled ? 'active' : 'paused',
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id' }
+  );
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, syncEnabled: enabled });
+});
+
+router.post('/users/:id/settings/scan-date', async (req, res) => {
+  const { id } = req.params;
+  const { startDate, endDate = null } = req.body;
+  const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
+  if (!startDate || !ISO_RE.test(startDate)) {
+    return res.status(400).json({ error: 'startDate is required and must be YYYY-MM-DD' });
+  }
+  if (endDate !== null && endDate !== undefined && !ISO_RE.test(endDate)) {
+    return res.status(400).json({ error: 'endDate must be YYYY-MM-DD or null' });
+  }
+
+  const effectiveEndDate = endDate || new Date().toISOString().slice(0, 10);
+  const updates = {
+    user_id: id,
+    scan_from_date: startDate,
+    scan_to_date: effectiveEndDate,
+    updated_at: new Date().toISOString(),
+  };
+
+  const [settingsErr, usersErr] = await Promise.all([
+    supabase.from('user_settings').upsert(updates, { onConflict: 'user_id' }).then((r) => r.error),
+    supabase.from('users').update({ last_message_id: null }).eq('id', id).then((r) => r.error),
+  ]);
+
+  if (settingsErr || usersErr) {
+    return res.status(500).json({ error: (settingsErr || usersErr).message });
+  }
+  res.json({ ok: true, scanFromDate: startDate, scanToDate: effectiveEndDate });
 });
 
 // ── POST /admin/users/:id/lock ────────────────────────────────────────────────
@@ -147,6 +267,24 @@ const ADMIN_HTML = /* html */`<!DOCTYPE html>
   .stat-card{background:#1e293b;border:1px solid #2d3e52;border-radius:10px;padding:16px 20px;flex:1;min-width:140px}
   .stat-val{font-size:26px;font-weight:700;color:#f1f5f9}
   .stat-lbl{font-size:11px;color:#64748b;margin-top:2px}
+  .selected-panel{background:#1e293b;border:1px solid #2d3e52;border-radius:12px;padding:18px 20px;margin-bottom:18px}
+  .selected-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+  .selected-title{font-size:14px;font-weight:700;color:#f1f5f9}
+  .selected-email{font-size:12px;color:#94a3b8;margin-top:3px}
+  .selected-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .btn-ghost-dark{background:none;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
+  .btn-ghost-dark:hover{border-color:#64748b;color:#f8fafc}
+  .selected-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .meta-box{background:#0f172a;border:1px solid #243244;border-radius:10px;padding:10px 12px}
+  .meta-val{font-size:14px;font-weight:700;color:#f8fafc}
+  .meta-lbl{font-size:11px;color:#64748b;margin-top:2px}
+  .selected-recent{display:flex;flex-direction:column;gap:10px}
+  .recent-item{background:#0f172a;border:1px solid #243244;border-radius:10px;padding:10px 12px}
+  .recent-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+  .recent-subject{font-size:13px;font-weight:600;color:#f8fafc}
+  .recent-status{font-size:11px;color:#93c5fd;text-transform:uppercase;font-weight:700}
+  .recent-meta{font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.5}
+  .recent-error{font-size:11px;color:#f87171;margin-top:4px}
 
   /* ── Table ── */
   .table-wrap{background:#1e293b;border:1px solid #2d3e52;border-radius:12px;overflow:hidden}
@@ -158,6 +296,7 @@ const ADMIN_HTML = /* html */`<!DOCTYPE html>
   td{padding:12px 16px;font-size:12px;border-bottom:1px solid #1a2535;vertical-align:middle}
   tr:last-child td{border-bottom:none}
   tr:hover td{background:#172033}
+  tr.selected td{background:#10203a}
 
   /* ── Status pills ── */
   .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:10px;font-size:11px;font-weight:600}
@@ -216,11 +355,32 @@ const ADMIN_HTML = /* html */`<!DOCTYPE html>
     </header>
 
     <!-- Stats -->
-    <div class="stats-row">
+  <div class="stats-row">
       <div class="stat-card"><div class="stat-val" id="stat-total">—</div><div class="stat-lbl">Total Users</div></div>
       <div class="stat-card"><div class="stat-val" id="stat-active">—</div><div class="stat-lbl">Active Sync</div></div>
       <div class="stat-card"><div class="stat-val" id="stat-locked">—</div><div class="stat-lbl">Locked</div></div>
       <div class="stat-card"><div class="stat-val" id="stat-emails">—</div><div class="stat-lbl">Emails Processed</div></div>
+    </div>
+
+    <div class="selected-panel">
+      <div class="selected-head">
+        <div>
+          <div class="selected-title">Selected Account</div>
+          <div class="selected-email" id="selected-email">Click a user below to open their mailbox dashboard.</div>
+        </div>
+        <button class="btn-ghost-dark" id="btn-sync-selected">Sync Now</button>
+      </div>
+      <div class="selected-actions">
+        <button class="btn-ghost-dark" id="btn-toggle-selected">Toggle Sync</button>
+        <button class="btn-ghost-dark" id="btn-set-window-selected">Set Scan Window</button>
+      </div>
+      <div class="selected-meta">
+        <div class="meta-box"><div class="meta-val" id="selected-sync">—</div><div class="meta-lbl">Sync Status</div></div>
+        <div class="meta-box"><div class="meta-val" id="selected-window">—</div><div class="meta-lbl">Scan Window</div></div>
+        <div class="meta-box"><div class="meta-val" id="selected-last-sync">—</div><div class="meta-lbl">Last Sync</div></div>
+        <div class="meta-box"><div class="meta-val" id="selected-count">—</div><div class="meta-lbl">Processed</div></div>
+      </div>
+      <div id="selected-recent" class="selected-recent"></div>
     </div>
 
     <!-- Users table -->
@@ -253,6 +413,8 @@ const ADMIN_HTML = /* html */`<!DOCTYPE html>
   const API = '';
   let adminToken = sessionStorage.getItem('adminToken');
   let pendingLockId = null;
+  let selectedUserId = null;
+  let userCache = [];
 
   // ── Boot ────────────────────────────────────────────────────────────────────
   if (adminToken) showDashboard();
@@ -315,7 +477,10 @@ const ADMIN_HTML = /* html */`<!DOCTYPE html>
       const res = await adminFetch('/admin/users');
       if (!res.ok) { if (res.status === 401) { showLogin(); return; } throw new Error(); }
       const { users } = await res.json();
+      userCache = users || [];
+      if (!selectedUserId && userCache.length) selectedUserId = userCache[0].id;
       renderTable(users);
+      if (selectedUserId) loadUserContext(selectedUserId);
     } catch {
       document.getElementById('table-body').innerHTML = '<div class="loading">Failed to load users.</div>';
     }
@@ -340,7 +505,7 @@ const ADMIN_HTML = /* html */`<!DOCTYPE html>
         ? \`<button class="btn-unlock" onclick="confirmUnlock('\${u.id}','\${esc(u.email)}')">Unlock</button>\`
         : \`<button class="btn-lock"   onclick="confirmLock('\${u.id}','\${esc(u.email)}')">Lock</button>\`;
 
-      return \`<tr>
+      return \`<tr class="\${u.id === selectedUserId ? 'selected' : ''}" data-user-id="\${u.id}">
         <td>\${esc(u.email)}</td>
         <td>\${u.connectedAt ? new Date(u.connectedAt).toLocaleDateString() : '—'}</td>
         <td>\${u.lastSync ? new Date(u.lastSync).toLocaleString() : 'Never'}</td>
@@ -359,6 +524,73 @@ const ADMIN_HTML = /* html */`<!DOCTYPE html>
         </tr></thead>
         <tbody>\${rows}</tbody>
       </table>\`;
+
+    document.querySelectorAll('[data-user-id]').forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        selectedUserId = row.dataset.userId;
+        renderTable(userCache);
+        loadUserContext(selectedUserId);
+      });
+    });
+  }
+
+  async function loadUserContext(userId) {
+    if (!userId) return;
+    const res = await adminFetch('/admin/users/' + userId + '/context');
+    if (!res.ok) return;
+    const data = await res.json();
+    renderSelected(data);
+  }
+
+  function renderSelected(data) {
+    const user = data.user || {};
+    const settings = data.settings || {};
+    const sync = data.sync || {};
+    document.getElementById('selected-email').textContent = user.email || 'Unknown account';
+    document.getElementById('selected-sync').textContent = settings.syncEnabled ? (settings.syncStatus || 'active') : 'paused';
+    const from = settings.scanFromDate || '—';
+    const to = settings.scanToDate || 'today';
+    document.getElementById('selected-window').textContent = from + ' → ' + to;
+    document.getElementById('selected-last-sync').textContent = user.lastSync ? new Date(user.lastSync).toLocaleString() : 'Never';
+    document.getElementById('selected-count').textContent = String(data.recentItems?.length ? data.recentItems.length : 0);
+
+    const items = data.recentItems || [];
+    document.getElementById('selected-recent').innerHTML = items.length ? items.map((item) => {
+      const status = item.status || 'pending';
+      return \`<div class="recent-item">
+        <div class="recent-top">
+          <div class="recent-subject">\${esc(item.subject || '(no subject)')}</div>
+          <div class="recent-status">\${esc(status)}</div>
+        </div>
+        <div class="recent-meta">\${esc((item.sender || '').replace(/<.*>/, '').trim())}<br>\${esc(item.property_label || item.caption || '')}<br>\${item.uploaded_assets ?? 0}/\${item.total_assets ?? 0} files</div>
+        \${item.error_reason ? \`<div class="recent-error">\${esc(item.error_reason)}</div>\` : ''}
+      </div>\`;
+    }).join('') : '<div class="loading">No recent items yet.</div>';
+
+    document.getElementById('btn-sync-selected').onclick = async () => {
+      await adminFetch('/admin/users/' + user.id + '/sync/run-now', { method: 'POST' });
+      loadUserContext(user.id);
+    };
+
+    document.getElementById('btn-toggle-selected').onclick = async () => {
+      await adminFetch('/admin/users/' + user.id + '/sync/toggle', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: !settings.syncEnabled }),
+      });
+      loadUsers();
+    };
+
+    document.getElementById('btn-set-window-selected').onclick = async () => {
+      const startDate = prompt('Start date YYYY-MM-DD', settings.scanFromDate || '');
+      if (!startDate) return;
+      const endDate = prompt('End date YYYY-MM-DD (blank = today)', settings.scanToDate || '');
+      await adminFetch('/admin/users/' + user.id + '/settings/scan-date', {
+        method: 'POST',
+        body: JSON.stringify({ startDate, endDate: endDate || null }),
+      });
+      loadUsers();
+    };
   }
 
   // ── Lock / Unlock ───────────────────────────────────────────────────────────

@@ -368,3 +368,27 @@ select.field-input { cursor: pointer; }
 .overlay-icon  { margin-bottom: 16px; }
 .overlay-title { font-size: 22px; font-weight: 700; color: #111827; margin-bottom: 8px; }
 .overlay-sub   { font-size: 14px; color: #374151; line-height: 1.65; margin-bottom: 24px; }
+.connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+  text-align: left;
+}
+.connection-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: #f9fafb;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.connection-pill:hover { background: #eff6ff; border-color: #bfdbfe; }
+.connection-pill.active { background: #dbeafe; border-color: #93c5fd; }
+.connection-pill-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

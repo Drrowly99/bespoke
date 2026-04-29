@@ -1,19 +1,20 @@
 /**
  * iCloud Backup — Web Dashboard
- * All API calls go to the same origin (/api/..., /auth/...) via fetch().
- * Session token is stored in localStorage under 'sessionToken'.
+ * Accounts are fetched from the backend on every load (source of truth = DB).
+ * The active session token is stored in localStorage under 'sessionToken'.
  */
 
-const POLL_MS      = 3000;
-const SESSION_KEY  = 'sessionToken';
-const EMAIL_KEY    = 'userEmail';
+const POLL_MS     = 3000;
+const SESSION_KEY = 'sessionToken';
+const EMAIL_KEY   = 'userEmail';
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let pollTimer = null;
-let histPage  = 0;
-let histTotal = 0;
+let pollTimer  = null;
+let histPage   = 0;
+let histTotal  = 0;
 let shareEmails = [];
-let linkQueue   = [];  // [{ url, albumName, status:'pending'|'uploading'|'done'|'error', error? }]
+let linkQueue  = [];
+let accounts   = []; // [{ email, token }] — loaded from backend
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -21,6 +22,7 @@ const els = {
   // Sidebar
   sbEmail:      $('sb-email'),
   sbStatusDot:  $('sb-status-dot'),
+  sbSwitch:     $('sb-switch'),
   sbReconnect:  $('sb-reconnect'),
   sbDisconnect: $('sb-disconnect'),
   // Sync
@@ -65,6 +67,7 @@ const els = {
   shareEmailHint:  $('share-email-hint'),
   // Connect overlay
   overlayDisconnected: $('overlay-disconnected'),
+  connectionList:      $('connection-list'),
   btnConnect:          $('btn-connect'),
 };
 
@@ -82,15 +85,15 @@ async function apiFetch(path, { method = 'GET', body } = {}) {
     });
 
     if (res.status === 401) {
+      console.warn('[apiFetch] 401 on', path, '— clearing session, back to picker');
       clearSession();
-      location.href = '/';
+      showOverlay();
       return null;
     }
 
     const data = await res.json().catch(() => null);
 
     if (!res.ok) {
-      // Surface the real error so callers can show it
       const msg = data?.error || `HTTP ${res.status}`;
       console.error(`[apiFetch] ${method} ${path} → ${res.status}: ${msg}`);
       return { ok: false, error: msg };
@@ -110,39 +113,104 @@ function clearSession() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
-  // Pick up session token from OAuth redirect: ?token=...&email=...
+  console.log('[init] fetching connected accounts from /auth/accounts…');
+
+  // Handle OAuth redirect: ?token=...&email=...
   const params = new URLSearchParams(location.search);
-  if (params.has('token')) {
-    localStorage.setItem(SESSION_KEY, params.get('token'));
-    if (params.has('email')) localStorage.setItem(EMAIL_KEY, params.get('email'));
+  const redirectToken = params.get('token');
+  const redirectEmail = params.get('email') || '';
+  if (redirectToken) {
     history.replaceState(null, '', '/');
   }
 
-  if (!localStorage.getItem(SESSION_KEY)) {
-    showOverlay();
+  // Fetch all connected accounts from backend (source of truth)
+  let fetched = [];
+  try {
+    const res  = await fetch('/auth/accounts');
+    const data = res.ok ? await res.json() : null;
+    fetched = data?.accounts || [];
+    console.log('[init] accounts from DB:', fetched.map(a => a.email));
+  } catch (err) {
+    console.error('[init] failed to fetch /auth/accounts:', err.message);
+  }
+
+  // If we just came back from OAuth, merge the new account in (it may not be in
+  // the DB list yet if the request raced, so add it explicitly)
+  if (redirectToken) {
+    const already = fetched.find(a => a.token === redirectToken);
+    if (!already) fetched.unshift({ email: redirectEmail, token: redirectToken });
+    localStorage.setItem(SESSION_KEY, redirectToken);
+    if (redirectEmail) localStorage.setItem(EMAIL_KEY, redirectEmail);
+  }
+
+  accounts = fetched;
+
+  // If we just came back from OAuth, auto-open that account — no extra click needed
+  if (redirectToken) {
+    console.log('[init] OAuth redirect — auto-opening dashboard for:', redirectEmail);
+    return openDashboard(redirectToken);
+  }
+
+  renderConnectionOverlay();
+  els.overlayDisconnected.classList.remove('hidden');
+}
+
+// ── Account picker overlay ────────────────────────────────────────────────────
+function showOverlay() {
+  console.log('[showOverlay] accounts available:', accounts.map(a => a.email));
+  renderConnectionOverlay();
+  els.overlayDisconnected.classList.remove('hidden');
+}
+
+function renderConnectionOverlay() {
+  if (!els.connectionList) return;
+
+  if (!accounts.length) {
+    els.connectionList.innerHTML =
+      `<div class="empty-state" style="margin:0 0 16px">No Gmail accounts connected yet.<br>Click below to add one.</div>`;
     return;
   }
 
-  // Validate session against /auth/me
+  const activeToken = localStorage.getItem(SESSION_KEY);
+  els.connectionList.innerHTML = accounts.map(acc => `
+    <button class="connection-pill ${acc.token === activeToken ? 'active' : ''}"
+            data-token="${esc(acc.token)}">
+      <span class="connection-pill-email">${esc(acc.email || 'Unknown account')}</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           style="flex-shrink:0;opacity:.4"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg>
+    </button>
+  `).join('');
+
+  els.connectionList.querySelectorAll('[data-token]').forEach(btn => {
+    btn.addEventListener('click', () => openDashboard(btn.dataset.token));
+  });
+}
+
+async function openDashboard(token) {
+  if (!token) return;
+  console.log('[openDashboard] validating session for token:', token.slice(0, 8) + '…');
+
+  const acc = accounts.find(a => a.token === token);
+  localStorage.setItem(SESSION_KEY, token);
+  if (acc?.email) localStorage.setItem(EMAIL_KEY, acc.email);
+
+  els.overlayDisconnected.classList.add('hidden');
+
   const me = await apiFetch('/auth/me');
-  if (!me || me.error) {
-    clearSession();
-    showOverlay();
+  if (!me) {
+    // apiFetch already called showOverlay on 401
     return;
   }
 
-  els.sbEmail.textContent = me.email || localStorage.getItem(EMAIL_KEY) || '—';
+  console.log('[openDashboard] session valid, loading dashboard for:', me.email);
+
+  els.sbEmail.textContent = me.email || acc?.email || '—';
 
   const status = await apiFetch('/api/status');
   if (status) renderSyncCard(status);
 
-  startPolling();
   loadShareEmails();
   loadAlbumSettings();
-}
-
-function showOverlay() {
-  els.overlayDisconnected.classList.remove('hidden');
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
@@ -265,10 +333,11 @@ async function refreshActivity() {
         ? `Last scan ${ago} · No new links found`
         : `Last scan ${ago} · ${p.lastRunDone}/${p.lastRunFound} uploaded`;
     }
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 
   if (!p.recentItems?.length) {
-    els.activityList.innerHTML = `<div class="empty-state">No emails processed yet.<br>Enable sync and click "Sync Now" to start.</div>`;
+    els.activityList.innerHTML = `<div class="empty-state">No emails processed yet.<br>Click "Sync Now" to start.</div>`;
     return;
   }
   els.activityList.innerHTML = p.recentItems.map(item => renderItem(item)).join('');
@@ -284,24 +353,31 @@ function addLinksToQueue() {
 
   if (!raw) { showHint(els.addLinkHint, 'Paste at least one iCloud link', 'error'); return; }
 
-  const urls = raw.split(/[\n\r\s]+/).map(u => u.trim()).filter(u => u.includes('icloud.com'));
+  // Accept links separated by commas, newlines, or spaces
+  const urls = raw.split(/[\n\r,\s]+/).map(u => u.trim()).filter(u => u.includes('icloud.com'));
   if (!urls.length) { showHint(els.addLinkHint, 'No valid iCloud links found', 'error'); return; }
 
-  const dupes = [];
-  for (const url of urls) {
-    if (linkQueue.find(q => q.url === url)) { dupes.push(url); continue; }
-    linkQueue.push({ url, albumName: urls.length === 1 ? album : null, status: 'pending' });
+  if (urls.length > 1) {
+    // Multiple links → one queue entry, all photos land in the same album
+    const queueKey = urls.slice().sort().join('|');
+    if (linkQueue.find(q => q.urls?.slice().sort().join('|') === queueKey)) {
+      showHint(els.addLinkHint, 'That batch is already in the queue', 'info');
+      return;
+    }
+    linkQueue.push({ url: urls[0], urls, albumName: album, status: 'pending' });
+    showHint(els.addLinkHint, `${urls.length} links queued → ${album ? `album "${album}"` : 'auto-named album'}`, 'ok');
+  } else {
+    const url = urls[0];
+    if (linkQueue.find(q => q.url === url && !q.urls)) {
+      showHint(els.addLinkHint, 'That link is already in the queue', 'info');
+      return;
+    }
+    linkQueue.push({ url, albumName: album || null, status: 'pending' });
+    showHint(els.addLinkHint, album ? `Queued → album "${album}"` : 'Queued (auto-named)', 'ok');
   }
 
   els.inputLinkUrl.value   = '';
   els.inputLinkAlbum.value = '';
-
-  const added = urls.length - dupes.length;
-  if (dupes.length) {
-    showHint(els.addLinkHint, `Added ${added} link(s). ${dupes.length} already in queue.`, 'info');
-  } else {
-    showHint(els.addLinkHint, `${added} link(s) added to queue`, 'ok');
-  }
   renderQueue();
 }
 
@@ -315,7 +391,7 @@ function renderQueue() {
   }
 
   els.queueList.innerHTML = linkQueue.map((item, i) => {
-    const token     = item.url.match(/\/photos\/[#/]*([A-Za-z0-9_\-]{6,})/)?.[1] || item.url.slice(-16);
+      const token     = item.url.match(/\/photos\/[#/]*([A-Za-z0-9_\-]{6,})/)?.[1] || item.url.slice(-16);
     const albumText = item.albumName
       ? `<span class="queue-item-album">${esc(item.albumName)}</span>`
       : `<span class="queue-item-album" style="font-style:italic;color:#9ca3af">auto-named</span>`;
@@ -361,7 +437,9 @@ els.btnBackupAll.addEventListener('click', async () => {
     try {
       const result = await apiFetch('/api/sync/process-link', {
         method: 'POST',
-        body: { icloudUrl: item.url, albumName: item.albumName },
+        body: item.urls?.length
+          ? { icloudUrls: item.urls, albumName: item.albumName }
+          : { icloudUrl: item.url, albumName: item.albumName },
       });
       item.status = result?.ok ? 'done' : 'error';
       if (!result?.ok) item.error = result?.error || 'Unknown error';
@@ -499,10 +577,15 @@ els.btnAddEmail.addEventListener('click', async () => {
 els.inputShareEmail.addEventListener('keydown', e => { if (e.key === 'Enter') els.btnAddEmail.click(); });
 
 // ── Account ───────────────────────────────────────────────────────────────────
+els.sbSwitch.addEventListener('click', () => {
+  clearSession();
+  showOverlay();
+});
+
 els.sbReconnect.addEventListener('click', () => { location.href = '/auth/google'; });
 
 els.sbDisconnect.addEventListener('click', async () => {
-  if (!confirm('Disconnect your Gmail account and sign out?')) return;
+  if (!confirm('Disconnect this Gmail account?')) return;
   const token = localStorage.getItem(SESSION_KEY);
   if (token) {
     await fetch('/auth/disconnect', {
@@ -511,33 +594,28 @@ els.sbDisconnect.addEventListener('click', async () => {
     });
   }
   clearSession();
+  // Reload so the picker re-fetches accounts from the DB (removed account won't appear)
   location.reload();
 });
 
 // ── Shared item renderer ──────────────────────────────────────────────────────
-// Heroicons outline — each wrapped in a coloured icon shell
 const STATUS_ICONS = {
-  // check-circle
   completed: `<span class="item-icon-wrap icon-completed">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
       <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
     </svg></span>`,
-  // x-circle
   failed: `<span class="item-icon-wrap icon-failed">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
       <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
     </svg></span>`,
-  // minus-circle
   skipped: `<span class="item-icon-wrap icon-skipped">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
       <path stroke-linecap="round" stroke-linejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
     </svg></span>`,
-  // clock (pending)
   pending: `<span class="item-icon-wrap icon-pending">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
       <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
     </svg></span>`,
-  // arrow-path (processing — animated)
   processing: `<span class="item-icon-wrap icon-processing">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" class="spin-icon">
       <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>

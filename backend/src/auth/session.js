@@ -5,7 +5,7 @@
 import { randomBytes } from 'crypto';
 import supabase from '../config/supabase.js';
 
-const SESSION_TTL_DAYS = 30;
+const SESSION_TTL_DAYS = 3650;
 
 export async function createSession(userId) {
   const token = randomBytes(32).toString('hex');

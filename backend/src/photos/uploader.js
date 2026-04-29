@@ -20,15 +20,42 @@ import { logger } from '../utils/logger.js';
 import { withRetry } from '../utils/sleep.js';
 
 const PHOTOS_BASE = 'https://photoslibrary.googleapis.com/v1';
-const MAX_FILE_BYTES = 20 * 1024 * 1024;   // 20 MB — Google Photos hard limit per file
-const CHUNK_BYTES = 50 * 1024 * 1024;   // 50 MB per upload chunk
+const MAX_FILE_BYTES    = 20 * 1024 * 1024;  // 20 MB — Google Photos hard limit per file
+const CHUNK_BYTES       = 200 * 1024 * 1024; // 200 MB per chunk (~40 photos at 5 MB avg)
+const UPLOAD_CONCURRENCY = 20;               // concurrent iCloud→Google uploads per chunk
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export async function uploadToGooglePhotos(userId, { assets, albumName, description, sortBy = 'exif_date', onProgress }) {
+/**
+ * Pre-create (or find) the Google Photos album for a user and return its ID.
+ * Call this before uploadToGooglePhotos so you can persist the album ID
+ * immediately and survive a mid-upload crash.
+ */
+export async function createAlbumForUser(userId, albumName) {
+  const tokens = await loadTokens(userId);
+  if (!tokens) throw new Error('No credentials for user');
+  const authClient = buildAuthedClient(tokens.access_token, tokens.refresh_token, tokens.expiry_date);
+  const accessToken = await getValidAccessToken(authClient);
+  if (authClient._pendingTokenUpdate) {
+    await updateAccessToken(userId, authClient._pendingTokenUpdate.access_token, authClient._pendingTokenUpdate.expiry_date);
+    delete authClient._pendingTokenUpdate;
+  }
+  return getOrCreateAlbum(accessToken, albumName);
+}
+
+export async function uploadToGooglePhotos(userId, {
+  assets,
+  albumName,
+  albumId: existingAlbumId = null,  // pass pre-created album ID to skip creation
+  skipFilenames = null,             // Set of filenames already saved — skip on resume
+  description,
+  sortBy = 'exif_date',
+  onProgress,
+  onBatchSaved = null,              // called after every batchCreate batch with saved entries so far
+}) {
   const tokens = await loadTokens(userId);
   if (!tokens) throw new Error('No credentials for user');
 
@@ -40,14 +67,23 @@ export async function uploadToGooglePhotos(userId, { assets, albumName, descript
     delete authClient._pendingTokenUpdate;
   }
 
-  const sorted = sortAssets(assets, sortBy);
+  // Filter out already-saved files when resuming
+  const pending = skipFilenames?.size
+    ? assets.filter(a => !skipFilenames.has(a.filename))
+    : assets;
+
+  if (skipFilenames?.size) {
+    console.log(`[UPLOAD] Resuming — skipping ${skipFilenames.size} already-saved file(s), ${pending.length} remaining`);
+  }
+
+  const sorted = sortAssets(pending, sortBy);
   const chunks = chunkBySize(sorted, CHUNK_BYTES);
-  const albumId = await createAlbum(accessToken, albumName);
+  const albumId = existingAlbumId || await getOrCreateAlbum(accessToken, albumName);
 
-  console.log(`[UPLOAD] ${sorted.length} files → ${chunks.length} chunk(s) ≤50 MB each`);
+  console.log(`[UPLOAD] ${sorted.length} files → ${chunks.length} chunk(s), ${UPLOAD_CONCURRENCY} concurrent uploads per chunk`);
 
-  const uploadTokens = [];
-  let globalIndex = 0;
+  const uploadEntries = [];
+  let globalIndex = skipFilenames?.size || 0; // offset progress counter by already-done count
 
   // Stage 1 — download + compress + upload bytes, chunk by chunk
   for (let ci = 0; ci < chunks.length; ci++) {
@@ -55,28 +91,80 @@ export async function uploadToGooglePhotos(userId, { assets, albumName, descript
     const chunkMB = (chunk.reduce((s, a) => s + (a.size || 0), 0) / 1024 / 1024).toFixed(1);
     console.log(`[UPLOAD] Chunk ${ci + 1}/${chunks.length} — ${chunk.length} files ~${chunkMB} MB`);
 
-    const results = await Promise.all(chunk.map(async (asset) => {
+    const results = await mapWithConcurrency(chunk, UPLOAD_CONCURRENCY, async (asset) => {
       const idx = ++globalIndex;
-      onProgress?.(asset.filename, idx, sorted.length);
+      onProgress?.(asset.filename, idx, (skipFilenames?.size || 0) + sorted.length);
       try {
-        return await withRetry(() => fetchAndUpload(accessToken, asset));
+        const uploadToken = await withRetry(() => fetchAndUpload(accessToken, asset));
+        return {
+          filename: asset.filename,
+          uploadToken,
+          status: 'uploaded',
+        };
       } catch (err) {
         logger.error('Asset upload failed', { filename: asset.filename, message: err.message });
-        return null;
+        return {
+          filename: asset.filename,
+          uploadToken: null,
+          status: 'failed',
+          error: err.message,
+        };
       }
-    }));
+    });
 
-    uploadTokens.push(...results.filter(Boolean));
+    uploadEntries.push(...results);
   }
 
   // Stage 2 — batchCreate media items (≤50 per call)
   let uploadedCount = 0;
-  for (let i = 0; i < uploadTokens.length; i += 50) {
-    const batch = uploadTokens.slice(i, i + 50);
+  const successfulUploads = uploadEntries.filter((item) => item.uploadToken);
+  for (let i = 0; i < successfulUploads.length; i += 50) {
+    const batch = successfulUploads.slice(i, i + 50);
+    const tokens = batch.map((item) => item.uploadToken);
+    const tokenToFilename = new Map(batch.map((item) => [item.uploadToken, item.filename]));
     try {
-      const created = await withRetry(() => createMediaItemsBatch(accessToken, albumId, batch, description));
+      const { created, failed } = await withRetry(() => createMediaItemsBatch(accessToken, albumId, tokens, description));
       uploadedCount += created.length;
       console.log(`[UPLOAD] batchCreate ${i / 50 + 1} — ${created.length}/${batch.length} items saved`);
+
+      const createdTokens = new Set(created.map((item) => item.uploadToken).filter(Boolean));
+      uploadEntries.forEach((entry) => {
+        if (entry.uploadToken && createdTokens.has(entry.uploadToken)) {
+          entry.status = 'saved';
+        }
+      });
+
+      if (failed.length) {
+        const retryResults = [];
+        for (const failedItem of failed) {
+          try {
+            const single = await withRetry(() => createMediaItemsBatch(accessToken, albumId, [failedItem.uploadToken], description));
+            retryResults.push(...single.created);
+            uploadEntries.forEach((entry) => {
+              if (entry.uploadToken === failedItem.uploadToken) {
+                entry.status = 'saved';
+              }
+            });
+          } catch (err) {
+            logger.warn('Single item retry failed', { filename: tokenToFilename.get(failedItem.uploadToken), message: err.message });
+            uploadEntries.forEach((entry) => {
+              if (entry.uploadToken === failedItem.uploadToken) {
+                entry.status = 'saved-failed';
+                entry.error = err.message;
+              }
+            });
+          }
+        }
+        uploadedCount += retryResults.length;
+      }
+
+      // Save progress after every batch so a crash can resume from here
+      if (onBatchSaved) {
+        const savedSoFar = uploadEntries.filter(e => e.status === 'saved');
+        await onBatchSaved(savedSoFar).catch(err =>
+          logger.warn('onBatchSaved failed', { message: err.message })
+        );
+      }
     } catch (err) {
       logger.error('batchCreate failed', { offset: i, message: err.message });
     }
@@ -118,7 +206,12 @@ export async function uploadToGooglePhotos(userId, { assets, albumName, descript
   }
 
   const albumUrl = shareableUrl || `https://photos.google.com/album/${albumId}`;
-  return { albumId, albumUrl, uploadedCount };
+  return {
+    albumId,
+    albumUrl,
+    uploadedCount,
+    uploadManifest: uploadEntries,
+  };
 }
 
 /**
@@ -261,6 +354,25 @@ function sortAssets(assets, sortBy) {
 
 // ── Album + batchCreate ───────────────────────────────────────────────────────
 
+async function getOrCreateAlbum(accessToken, title) {
+  // Search existing albums by title first — reuse if found
+  let pageToken = null;
+  do {
+    const url = `${PHOTOS_BASE}/albums?pageSize=50&excludeNonAppCreatedData=false${pageToken ? `&pageToken=${pageToken}` : ''}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) break; // if listing fails, fall through to create
+    const data = await res.json();
+    const existing = (data.albums || []).find(a => a.title === title);
+    if (existing) {
+      console.log(`[UPLOAD] Reusing existing album "${title}" (id=${existing.id})`);
+      return existing.id;
+    }
+    pageToken = data.nextPageToken || null;
+  } while (pageToken);
+
+  return createAlbum(accessToken, title);
+}
+
 async function createAlbum(accessToken, title) {
   const res = await fetch(`${PHOTOS_BASE}/albums`, {
     method: 'POST',
@@ -293,17 +405,33 @@ async function createMediaItemsBatch(accessToken, albumId, tokens, description) 
   }
 
   const data = await res.json();
-  const results = (data.newMediaItemResults || []).filter(r => r.status?.message === 'Success' || !r.status?.message);
+  const rawResults = data.newMediaItemResults || [];
+  const created = [];
+  const failed = [];
 
-  if (results.length < tokens.length) {
-    const failures = (data.newMediaItemResults || []).filter(r => r.status?.message && r.status.message !== 'Success');
-    failures.forEach(f => {
-      logger.warn('Google Photos item failed to save', { message: f.status.message, code: f.status.code });
-      console.warn(`[UPLOAD] Item failed: ${f.status.message} (code: ${f.status.code})`);
-    });
+  rawResults.forEach((result, idx) => {
+    if (result.status?.message === 'Success' || !result.status?.message) {
+      created.push(result);
+      return;
+    }
+    const failedToken = tokens[idx];
+    const failedItem = {
+      uploadToken: failedToken,
+      status: result.status,
+      filename: null,
+    };
+    failed.push(failedItem);
+    logger.warn('Google Photos item failed to save', { message: result.status.message, code: result.status.code });
+    console.warn(`[UPLOAD] Item failed: ${result.status.message} (code: ${result.status.code})`);
+  });
+
+  if (rawResults.length < tokens.length) {
+    for (let i = rawResults.length; i < tokens.length; i++) {
+      failed.push({ uploadToken: tokens[i], status: { message: 'No result returned' }, filename: null });
+    }
   }
 
-  return results;
+  return { created, failed };
 }
 
 async function getValidAccessToken(authClient) {
@@ -361,4 +489,22 @@ async function sendAlbumEmails(authClient, recipients, albumName, albumUrl) {
 
 function kb(buf) {
   return Math.round(buf.length / 1024);
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (true) {
+      const idx = cursor;
+      cursor += 1;
+      if (idx >= items.length) return;
+      results[idx] = await mapper(items[idx], idx);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
