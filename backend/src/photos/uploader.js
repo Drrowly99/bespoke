@@ -17,12 +17,13 @@ import { buildAuthedClient } from '../auth/google.js';
 import { loadTokens, updateAccessToken } from '../auth/tokens.js';
 import supabase from '../config/supabase.js';
 import { logger } from '../utils/logger.js';
-import { withRetry } from '../utils/sleep.js';
+import { withRetry, createRateLimiter } from '../utils/sleep.js';
 
 const PHOTOS_BASE = 'https://photoslibrary.googleapis.com/v1';
-const MAX_FILE_BYTES    = 20 * 1024 * 1024;  // 20 MB — Google Photos hard limit per file
-const CHUNK_BYTES       = 200 * 1024 * 1024; // 200 MB per chunk (~40 photos at 5 MB avg)
-const UPLOAD_CONCURRENCY = 20;               // concurrent iCloud→Google uploads per chunk
+const MAX_FILE_BYTES     = 20 * 1024 * 1024;  // 20 MB — Google Photos hard limit per file
+const CHUNK_BYTES        = 200 * 1024 * 1024; // 200 MB per chunk (~40 photos at 5 MB avg)
+const UPLOAD_CONCURRENCY = 5;                 // concurrent uploads — keep well under quota
+const UPLOAD_RATE_PER_MIN = 55;              // token bucket cap (Google allows ~75/min/user)
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -80,8 +81,9 @@ export async function uploadToGooglePhotos(userId, {
   const chunks = chunkBySize(sorted, CHUNK_BYTES);
   const albumId = existingAlbumId || await getOrCreateAlbum(accessToken, albumName);
 
-  console.log(`[UPLOAD] ${sorted.length} files → ${chunks.length} chunk(s), ${UPLOAD_CONCURRENCY} concurrent uploads per chunk`);
+  console.log(`[UPLOAD] ${sorted.length} files → ${chunks.length} chunk(s), ${UPLOAD_CONCURRENCY} concurrent uploads, ${UPLOAD_RATE_PER_MIN} req/min throttle`);
 
+  const throttle = createRateLimiter(UPLOAD_RATE_PER_MIN);
   const uploadEntries = [];
   let globalIndex = skipFilenames?.size || 0; // offset progress counter by already-done count
 
@@ -95,6 +97,7 @@ export async function uploadToGooglePhotos(userId, {
       const idx = ++globalIndex;
       onProgress?.(asset.filename, idx, (skipFilenames?.size || 0) + sorted.length);
       try {
+        await throttle(); // enforce rate limit before hitting Google's upload endpoint
         const uploadToken = await withRetry(() => fetchAndUpload(accessToken, asset));
         return {
           filename: asset.filename,

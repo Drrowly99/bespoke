@@ -42,6 +42,22 @@ export async function resumePendingLinks(userId) {
     console.log(`[PIPELINE] RESUME — reset ${reset.length} stuck row(s) processing→pending`);
   }
 
+  // Reset partial upload failures so they can resume from where they left off.
+  // Only rows where an album was already created and at least 1 file was saved —
+  // meaning the failure was mid-upload (rate limit, transient error) not a bad link.
+  const { data: partial } = await supabase
+    .from('processed_emails')
+    .update({ status: 'pending' })
+    .eq('user_id', userId)
+    .eq('status', 'failed')
+    .not('google_album_id', 'is', null)
+    .gt('uploaded_assets', 0)
+    .select('id');
+
+  if (partial?.length) {
+    console.log(`[PIPELINE] RESUME — reset ${partial.length} partial-upload failure(s) failed→pending`);
+  }
+
   const { data: pending, error } = await supabase
     .from('processed_emails')
     .select('id, icloud_url, sender, subject, caption, description, received_at, link_index, total_links')
@@ -250,9 +266,12 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
       console.log(`[PIPELINE] ${assets.length} assets found — reading EXIF…`);
 
       let exifDate = null;
+      let exifChecked = 0;
       for (const asset of assets) {
+        if (exifChecked >= 5) break; // only probe the first 5 images
         const isImage = asset.mimeType?.startsWith('image/');
         if (!isImage) continue;
+        exifChecked++;
         try {
           const slice = await fetchExifSlice(asset.url);
           if (!geolocationData) {

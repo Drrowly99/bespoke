@@ -1,6 +1,26 @@
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Token-bucket rate limiter.
+ * Each call to the returned function claims the next available slot and waits
+ * if necessary, so concurrent callers are serialised at exactly the given rate.
+ *
+ * @param {number} requestsPerMinute
+ * @returns {() => Promise<void>}
+ */
+export function createRateLimiter(requestsPerMinute) {
+  const intervalMs = (60 * 1000) / requestsPerMinute;
+  let nextSlot = 0;
+  return async function throttle() {
+    const now = Date.now();
+    if (nextSlot < now) nextSlot = now;
+    const delay = nextSlot - now;
+    nextSlot += intervalMs;
+    if (delay > 0) await sleep(delay);
+  };
+}
+
+/**
  * Exponential backoff retry wrapper.
  * @param {() => Promise<any>} fn
  * @param {number} retries
