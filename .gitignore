@@ -18,3 +18,4 @@ yarn-error.log*
 out/
 build/
 backend/ecosystem.config.cjs
+backend/data/mail_scan_log.json
