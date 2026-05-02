@@ -4,6 +4,7 @@
  */
 
 const POLL_MS = 3000;
+const SAMPLE_SHARE_TOKEN = '027hSDCde-ExfSzGaGDm08kPQ';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let pollTimer = null;
@@ -50,6 +51,8 @@ const els = {
   // Settings — album naming
   selectAlbumDateSource: $('select-album-date-source'),
   inputAlbumPattern: $('input-album-pattern'),
+  inputIncludeShareToken: $('input-include-share-token'),
+  selectShareTokenPosition: $('select-share-token-position'),
   btnSaveAlbumSettings: $('btn-save-album-settings'),
   albumSettingsHint: $('album-settings-hint'),
   albumNamePreview: $('album-name-preview'),
@@ -360,7 +363,9 @@ async function loadAlbumSettings() {
   if (!data) return;
   els.selectAlbumDateSource.value = data.albumDateSource || 'received';
   els.inputAlbumPattern.value = data.albumNamePattern || 'Auto Backup - {date} - {location}';
-  updateAlbumPreview();
+  els.inputIncludeShareToken.checked = !!data.includeShareToken;
+  els.selectShareTokenPosition.value = data.shareTokenPosition || 'suffix';
+  refreshAlbumPreview();
 }
 
 function updateAlbumPreview() {
@@ -374,25 +379,53 @@ function updateAlbumPreview() {
   els.albumNamePreview.textContent = preview || 'Auto Backup - ' + exampleDate;
 }
 
-els.inputAlbumPattern.addEventListener('input', updateAlbumPreview);
-els.selectAlbumDateSource.addEventListener('change', updateAlbumPreview);
+els.inputAlbumPattern.addEventListener('input', refreshAlbumPreview);
+els.selectAlbumDateSource.addEventListener('change', refreshAlbumPreview);
 
 els.btnSaveAlbumSettings.addEventListener('click', async () => {
   els.btnSaveAlbumSettings.disabled = true;
   const result = await sw('SET_ALBUM_SETTINGS', {
     albumDateSource: els.selectAlbumDateSource.value,
     albumNamePattern: els.inputAlbumPattern.value.trim() || 'Auto Backup - {date} - {location}',
+    includeShareToken: els.inputIncludeShareToken.checked,
+    shareTokenPosition: els.selectShareTokenPosition.value,
   });
   els.btnSaveAlbumSettings.disabled = false;
   if (result?.ok) {
     showHint(els.albumSettingsHint, 'Saved', 'ok');
-    updateAlbumPreview();
+    refreshAlbumPreview();
   } else {
     showHint(els.albumSettingsHint, 'Save failed', 'error');
   }
 });
 
 // ── Settings — share emails ───────────────────────────────────────────────────
+function updateShareTokenControls() {
+  els.selectShareTokenPosition.disabled = !els.inputIncludeShareToken.checked;
+}
+
+function refreshAlbumPreview() {
+  const pattern = els.inputAlbumPattern.value || 'Auto Backup - {date} - {location}';
+  const dateSource = els.selectAlbumDateSource.value;
+  const exampleDate = dateSource === 'exif' ? '2024-07-15' : todayISO();
+  const includeToken = els.inputIncludeShareToken.checked;
+  const tokenPattern = pattern.includes('{icloudToken}');
+  const preview = pattern
+    .replace(/\{date\}/g, exampleDate)
+    .replace(/\{location\}/g, 'London, England')
+    .replace(/\{icloudToken\}/g, includeToken ? SAMPLE_SHARE_TOKEN : '');
+  const arranged = includeToken && SAMPLE_SHARE_TOKEN && !tokenPattern
+    ? (els.selectShareTokenPosition.value === 'prefix' ? `${SAMPLE_SHARE_TOKEN} - ${preview}` : `${preview} - ${SAMPLE_SHARE_TOKEN}`)
+    : preview;
+  els.albumNamePreview.textContent = arranged.replace(/[\s\-–|,]+$/, '').replace(/\s{2,}/g, ' ').trim() || 'Auto Backup - ' + exampleDate;
+  updateShareTokenControls();
+}
+
+els.inputAlbumPattern.addEventListener('input', refreshAlbumPreview);
+els.selectAlbumDateSource.addEventListener('change', refreshAlbumPreview);
+els.inputIncludeShareToken.addEventListener('change', refreshAlbumPreview);
+els.selectShareTokenPosition.addEventListener('change', refreshAlbumPreview);
+
 async function loadShareEmails() {
   const data = await sw('GET_SHARE_EMAILS');
   shareEmails = data?.shareEmails || [];

@@ -7,6 +7,7 @@
 const POLL_MS     = 3000;
 const SESSION_KEY = 'sessionToken';
 const EMAIL_KEY   = 'userEmail';
+const SAMPLE_SHARE_TOKEN = '027hSDCde-ExfSzGaGDm08kPQ';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let pollTimer  = null;
@@ -57,6 +58,8 @@ const els = {
   // Settings — album naming
   selectAlbumDateSource: $('select-album-date-source'),
   inputAlbumPattern:     $('input-album-pattern'),
+  inputIncludeShareToken: $('input-include-share-token'),
+  selectShareTokenPosition: $('select-share-token-position'),
   btnSaveAlbumSettings:  $('btn-save-album-settings'),
   albumSettingsHint:     $('album-settings-hint'),
   albumNamePreview:      $('album-name-preview'),
@@ -276,12 +279,15 @@ els.syncToggle.addEventListener('change', async () => {
 els.btnSyncNow.addEventListener('click', async () => {
   els.btnSyncNow.disabled = true;
   els.btnSyncNow.textContent = 'Starting…';
-  await apiFetch('/api/sync/run-now', { method: 'POST' });
-  setTimeout(() => {
-    els.btnSyncNow.disabled = false;
-    els.btnSyncNow.innerHTML = SYNC_NOW_HTML;
-    refreshActivity();
-  }, 800);
+  const result = await apiFetch('/api/sync/run-now', { method: 'POST' });
+  if (result?.alreadyRunning) {
+    // Another sync is already in progress — just make sure the timer is watching it
+    els.btnSyncNow.textContent = 'Running…';
+    startPolling();
+    return;
+  }
+  // Give the backend a moment to call startRun, then begin polling for completion
+  setTimeout(() => startPolling(), 800);
 });
 
 const SYNC_NOW_HTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>Sync Now`;
@@ -323,6 +329,8 @@ async function refreshActivity() {
     els.btnSyncNow.textContent = 'Running…';
     updateStatusBadge('processing');
     els.syncMeta.textContent = p.currentItem ? `Uploading: ${p.currentItem}` : 'Scanning Gmail…';
+    // Keep the timer alive so we detect when running flips back to false
+    if (!pollTimer) pollTimer = setInterval(refreshActivity, POLL_MS);
   } else {
     els.activityRunning.classList.add('hidden');
     els.btnSyncNow.disabled = false;
@@ -333,6 +341,7 @@ async function refreshActivity() {
         ? `Last scan ${ago} · No new links found`
         : `Last scan ${ago} · ${p.lastRunDone}/${p.lastRunFound} uploaded`;
     }
+    // Sync is done — stop polling to save API calls
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 
@@ -497,7 +506,9 @@ async function loadAlbumSettings() {
   if (!data) return;
   els.selectAlbumDateSource.value = data.albumDateSource || 'received';
   els.inputAlbumPattern.value     = data.albumNamePattern || 'Auto Backup - {date} - {location}';
-  updateAlbumPreview();
+  els.inputIncludeShareToken.checked = !!data.includeShareToken;
+  els.selectShareTokenPosition.value = data.shareTokenPosition || 'suffix';
+  refreshAlbumPreview();
 }
 
 function updateAlbumPreview() {
@@ -511,8 +522,8 @@ function updateAlbumPreview() {
   els.albumNamePreview.textContent = preview || `Auto Backup - ${exDate}`;
 }
 
-els.inputAlbumPattern.addEventListener('input', updateAlbumPreview);
-els.selectAlbumDateSource.addEventListener('change', updateAlbumPreview);
+els.inputAlbumPattern.addEventListener('input', refreshAlbumPreview);
+els.selectAlbumDateSource.addEventListener('change', refreshAlbumPreview);
 
 els.btnSaveAlbumSettings.addEventListener('click', async () => {
   els.btnSaveAlbumSettings.disabled = true;
@@ -521,12 +532,40 @@ els.btnSaveAlbumSettings.addEventListener('click', async () => {
     body: {
       albumDateSource:  els.selectAlbumDateSource.value,
       albumNamePattern: els.inputAlbumPattern.value.trim() || 'Auto Backup - {date} - {location}',
+      includeShareToken: els.inputIncludeShareToken.checked,
+      shareTokenPosition: els.selectShareTokenPosition.value,
     },
   });
   els.btnSaveAlbumSettings.disabled = false;
   showHint(els.albumSettingsHint, result?.ok ? 'Saved' : 'Save failed', result?.ok ? 'ok' : 'error');
-  if (result?.ok) updateAlbumPreview();
+  if (result?.ok) refreshAlbumPreview();
 });
+
+function updateShareTokenControls() {
+  els.selectShareTokenPosition.disabled = !els.inputIncludeShareToken.checked;
+}
+
+function refreshAlbumPreview() {
+  const pattern = els.inputAlbumPattern.value || 'Auto Backup - {date} - {location}';
+  const dateSource = els.selectAlbumDateSource.value;
+  const exDate = dateSource === 'exif' ? '2024-07-15' : todayISO();
+  const includeToken = els.inputIncludeShareToken.checked;
+  const tokenPattern = pattern.includes('{icloudToken}');
+  const preview = pattern
+    .replace(/\{date\}/g, exDate)
+    .replace(/\{location\}/g, 'London, England')
+    .replace(/\{icloudToken\}/g, includeToken ? SAMPLE_SHARE_TOKEN : '');
+  const arranged = includeToken && SAMPLE_SHARE_TOKEN && !tokenPattern
+    ? (els.selectShareTokenPosition.value === 'prefix' ? `${SAMPLE_SHARE_TOKEN} - ${preview}` : `${preview} - ${SAMPLE_SHARE_TOKEN}`)
+    : preview;
+  els.albumNamePreview.textContent = arranged.replace(/[\s\-–|,]+$/, '').replace(/\s{2,}/g, ' ').trim() || `Auto Backup - ${exDate}`;
+  updateShareTokenControls();
+}
+
+els.inputAlbumPattern.addEventListener('input', refreshAlbumPreview);
+els.selectAlbumDateSource.addEventListener('change', refreshAlbumPreview);
+els.inputIncludeShareToken.addEventListener('change', refreshAlbumPreview);
+els.selectShareTokenPosition.addEventListener('change', refreshAlbumPreview);
 
 // ── Settings — share emails ───────────────────────────────────────────────────
 async function loadShareEmails() {

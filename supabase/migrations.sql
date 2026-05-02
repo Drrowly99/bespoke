@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
   share_emails         JSONB DEFAULT '[]',  -- email addresses to notify after each album upload
   album_date_source    TEXT DEFAULT 'received',  -- 'received' | 'exif' — which date to use in album name
   album_name_pattern   TEXT DEFAULT 'Auto Backup - {date} - {location}',  -- template tokens: {date} {location}
+  album_name_include_share_token BOOLEAN DEFAULT FALSE,  -- include the iCloud share token in the album name
+  album_name_share_token_position TEXT DEFAULT 'suffix',  -- 'prefix' | 'suffix'
   updated_at           TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -132,6 +134,8 @@ ALTER TABLE geocoding_cache    ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS share_emails JSONB DEFAULT '[]';
 -- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS album_date_source TEXT DEFAULT 'received';
 -- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS album_name_pattern TEXT DEFAULT 'Auto Backup - {date} - {location}';
+-- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS album_name_include_share_token BOOLEAN DEFAULT FALSE;
+-- ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS album_name_share_token_position TEXT DEFAULT 'suffix';
 -- ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ;
 -- ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_reason TEXT;
 -- ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_by TEXT;

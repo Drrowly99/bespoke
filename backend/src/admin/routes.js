@@ -57,7 +57,7 @@ router.get('/users/:id/context', async (req, res) => {
 
   const [{ data: user }, { data: settings }, { data: recentItems }, syncState] = await Promise.all([
     supabase.from('users').select('id, email, connected_at, last_sync, is_locked, locked_at, locked_reason, locked_by').eq('id', id).single(),
-    supabase.from('user_settings').select('icloud_sync_enabled, sync_status, scan_from_date, scan_to_date, share_emails, album_date_source, album_name_pattern').eq('user_id', id).single(),
+    supabase.from('user_settings').select('icloud_sync_enabled, sync_status, scan_from_date, scan_to_date, share_emails, album_date_source, album_name_pattern, album_name_include_share_token, album_name_share_token_position').eq('user_id', id).single(),
     supabase.from('processed_emails')
       .select('id, sender, subject, caption, property_label, google_album_url, status, error_reason, received_at, created_at, total_links, link_index, total_assets, uploaded_assets')
       .eq('user_id', id)
@@ -87,6 +87,8 @@ router.get('/users/:id/context', async (req, res) => {
       shareEmails: settings?.share_emails ?? [],
       albumDateSource: settings?.album_date_source ?? 'received',
       albumNamePattern: settings?.album_name_pattern ?? 'Auto Backup - {date} - {location}',
+      includeShareToken: settings?.album_name_include_share_token ?? false,
+      shareTokenPosition: settings?.album_name_share_token_position ?? 'suffix',
     },
     sync: {
       running: syncState.running,

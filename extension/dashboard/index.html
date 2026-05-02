@@ -217,7 +217,8 @@
         <p class="hint-text" style="margin-bottom:18px">
           Control how Google Photos albums are named when photos are uploaded.
           Use <code style="background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px">{date}</code> and
-          <code style="background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px">{location}</code> as tokens.
+          <code style="background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px">{location}</code> and
+          <code style="background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:12px">{icloudToken}</code> as tokens.
         </p>
 
         <div class="field-row" style="margin-bottom:16px">
@@ -231,6 +232,23 @@
           <div class="field-group flex-2">
             <label class="field-label">Name pattern</label>
             <input type="text" id="input-album-pattern" class="field-input" placeholder="Auto Backup - {date} - {location}" />
+          </div>
+        </div>
+
+        <div class="field-row" style="margin-bottom:16px">
+          <div class="field-group">
+            <label class="field-label">iCloud link ID</label>
+            <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;padding:11px 0">
+              <input type="checkbox" id="input-include-share-token" />
+              <span>Include token in album name</span>
+            </label>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Token placement</label>
+            <select id="select-share-token-position" class="field-input">
+              <option value="prefix">Prefix</option>
+              <option value="suffix">Suffix</option>
+            </select>
           </div>
         </div>
 

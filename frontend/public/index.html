@@ -226,7 +226,7 @@
         <div class="card-title" style="margin-bottom:6px">Album Naming</div>
         <p class="hint-text" style="margin-bottom:18px">
           Control how Google Photos albums are named.
-          Use <code>{date}</code> and <code>{location}</code> as tokens.
+          Use <code>{date}</code>, <code>{location}</code>, and <code>{icloudToken}</code> as tokens.
         </p>
         <div class="field-row" style="margin-bottom:16px;align-items:flex-end">
           <div class="field-group" style="max-width:220px">
@@ -239,6 +239,22 @@
           <div class="field-group">
             <label class="field-label">Name pattern</label>
             <input type="text" id="input-album-pattern" class="field-input" placeholder="Auto Backup - {date} - {location}" />
+          </div>
+        </div>
+        <div class="field-row" style="margin-bottom:16px;align-items:flex-end">
+          <div class="field-group" style="max-width:220px">
+            <label class="field-label">iCloud link ID</label>
+            <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;padding:11px 0">
+              <input type="checkbox" id="input-include-share-token" />
+              <span>Include token in album name</span>
+            </label>
+          </div>
+          <div class="field-group" style="max-width:220px">
+            <label class="field-label">Token placement</label>
+            <select id="select-share-token-position" class="field-input">
+              <option value="prefix">Prefix</option>
+              <option value="suffix">Suffix</option>
+            </select>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
@@ -292,6 +308,6 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=7"></script>
+  <script src="/js/app.js?v=8"></script>
 </body>
 </html>

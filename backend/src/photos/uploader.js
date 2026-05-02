@@ -233,9 +233,13 @@ export function buildAlbumName(receivedDate, geolocation, emailSubject, {
   dateSource = 'received',
   exifDate = null,
   pattern = 'Auto Backup - {date} - {location}',
+  shareToken = null,
+  includeShareToken = false,
+  shareTokenPosition = 'suffix',
 } = {}) {
   const effectiveDate = (dateSource === 'exif' && exifDate) ? exifDate : receivedDate;
   const dateStr = new Date(effectiveDate).toISOString().slice(0, 10);
+  const tokenStr = String(shareToken || '').trim();
 
   let location = '';
   if (geolocation?.address) {
@@ -251,9 +255,17 @@ export function buildAlbumName(receivedDate, geolocation, emailSubject, {
     location = cleaned;
   }
 
-  let name = (pattern || 'Auto Backup - {date} - {location}')
-    .replace('{date}', dateStr)
-    .replace('{location}', location);
+  const basePattern = pattern || 'Auto Backup - {date} - {location}';
+  let name = basePattern
+    .replace(/\{date\}/g, dateStr)
+    .replace(/\{location\}/g, location)
+    .replace(/\{icloudToken\}/g, tokenStr);
+
+  if (includeShareToken && tokenStr && !basePattern.includes('{icloudToken}')) {
+    name = shareTokenPosition === 'prefix'
+      ? `${tokenStr} - ${name}`
+      : `${name} - ${tokenStr}`;
+  }
 
   // Clean up orphaned separators when location is empty
   // e.g. "Auto Backup - 2024-07-15 - " → "Auto Backup - 2024-07-15"

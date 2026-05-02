@@ -260,34 +260,50 @@ router.post('/settings/share-emails', async (req, res) => {
 router.get('/settings/album', async (req, res) => {
   const { data } = await supabase
     .from('user_settings')
-    .select('album_date_source, album_name_pattern')
+    .select('album_date_source, album_name_pattern, album_name_include_share_token, album_name_share_token_position')
     .eq('user_id', req.userId)
     .single();
   res.json({
     albumDateSource:  data?.album_date_source  || 'received',
     albumNamePattern: data?.album_name_pattern || 'Auto Backup - {date} - {location}',
+    includeShareToken: data?.album_name_include_share_token ?? false,
+    shareTokenPosition: data?.album_name_share_token_position || 'suffix',
   });
 });
 
 // ── POST /api/settings/album ──────────────────────────────────────────────────
-// Body: { albumDateSource: 'received'|'exif', albumNamePattern: '{date} - {location}' }
+// Body: { albumDateSource: 'received'|'exif', albumNamePattern: '{date} - {location}', includeShareToken: boolean, shareTokenPosition: 'prefix'|'suffix' }
 router.post('/settings/album', async (req, res) => {
-  const { albumDateSource, albumNamePattern } = req.body;
+  const { albumDateSource, albumNamePattern, includeShareToken, shareTokenPosition } = req.body;
   if (albumDateSource && !['received', 'exif'].includes(albumDateSource)) {
     return res.status(400).json({ error: 'albumDateSource must be "received" or "exif"' });
   }
   if (albumNamePattern !== undefined && typeof albumNamePattern !== 'string') {
     return res.status(400).json({ error: 'albumNamePattern must be a string' });
   }
+  if (includeShareToken !== undefined && typeof includeShareToken !== 'boolean') {
+    return res.status(400).json({ error: 'includeShareToken must be a boolean' });
+  }
+  if (shareTokenPosition !== undefined && !['prefix', 'suffix'].includes(shareTokenPosition)) {
+    return res.status(400).json({ error: 'shareTokenPosition must be "prefix" or "suffix"' });
+  }
   const updates = { user_id: req.userId, updated_at: new Date().toISOString() };
   if (albumDateSource)  updates.album_date_source  = albumDateSource;
   if (albumNamePattern !== undefined) updates.album_name_pattern = albumNamePattern || 'Auto Backup - {date} - {location}';
+  if (includeShareToken !== undefined) updates.album_name_include_share_token = includeShareToken;
+  if (shareTokenPosition !== undefined) updates.album_name_share_token_position = shareTokenPosition;
 
   const { error } = await supabase
     .from('user_settings')
     .upsert(updates, { onConflict: 'user_id' });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ ok: true, albumDateSource: updates.album_date_source, albumNamePattern: updates.album_name_pattern });
+  res.json({
+    ok: true,
+    albumDateSource: updates.album_date_source,
+    albumNamePattern: updates.album_name_pattern,
+    includeShareToken: updates.album_name_include_share_token,
+    shareTokenPosition: updates.album_name_share_token_position,
+  });
 });
 
 // ── GET /api/logs ─────────────────────────────────────────────────────────────

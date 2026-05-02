@@ -58,7 +58,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     GET_SHARE_EMAILS:    () => apiFetch('/api/settings/share-emails'),
     SET_SHARE_EMAILS:    () => apiFetch('/api/settings/share-emails', { method: 'POST', body: { emails: msg.emails } }),
     GET_ALBUM_SETTINGS:  () => apiFetch('/api/settings/album'),
-    SET_ALBUM_SETTINGS:  () => apiFetch('/api/settings/album', { method: 'POST', body: { albumDateSource: msg.albumDateSource, albumNamePattern: msg.albumNamePattern } }),
+    SET_ALBUM_SETTINGS:  () => apiFetch('/api/settings/album', { method: 'POST', body: { albumDateSource: msg.albumDateSource, albumNamePattern: msg.albumNamePattern, includeShareToken: msg.includeShareToken, shareTokenPosition: msg.shareTokenPosition } }),
     PROCESS_LINK:       () => submitLink(msg.icloudUrl, msg.albumName),
     GET_TAB_LINK:    () => getActiveTabLink(),
   };

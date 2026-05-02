@@ -291,7 +291,7 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
 
       const { data: userSettings } = await supabase
         .from('user_settings')
-        .select('album_date_source, album_name_pattern')
+        .select('album_date_source, album_name_pattern, album_name_include_share_token, album_name_share_token_position')
         .eq('user_id', userId)
         .single();
 
@@ -300,6 +300,9 @@ async function processLink(userId, rowId, { subject, sender, caption, body, rece
         dateSource: userSettings?.album_date_source || 'received',
         exifDate,
         pattern: userSettings?.album_name_pattern || undefined,
+        shareToken,
+        includeShareToken: userSettings?.album_name_include_share_token ?? false,
+        shareTokenPosition: userSettings?.album_name_share_token_position || 'suffix',
       });
       if (!albumName && totalLinks > 1) resolvedAlbumName += ` (${linkIndex + 1} of ${totalLinks})`;
 
